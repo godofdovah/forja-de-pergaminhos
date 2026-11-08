@@ -1,0 +1,8 @@
+pymupdf>=1.24
+pdf2docx
+pillow
+python-pptx
+openpyxl
+deep-translator
+tkinterdnd2
+pywin32; sys_platform == "win32"

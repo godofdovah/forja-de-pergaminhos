@@ -1,0 +1,23 @@
+FORJA DE PERGAMINHOS
+
+Programa de PDF parecido com o iLovePDF, só que roda no seu computador. Seus arquivos não vão para a internet e não tem limite de uso.
+
+COMO INSTALAR
+
+Dê dois cliques em "Instalar Forja de Pergaminhos.bat" e espere uns cinco minutos. Ele monta o programa, instala e cria os ícones na Área de Trabalho e no Menu Iniciar. No final o programa abre sozinho. Depois disso você pode apagar esta pasta, porque o programa fica instalado em outro lugar.
+
+Se o computador ainda não tiver o Python, o instalador baixa ele primeiro e pede para você rodar o instalador de novo. O Python só é usado para montar o programa, você não precisa mexer nele.
+
+Para desinstalar, apague os ícones e a pasta "Forja de Pergaminhos" que fica em %LOCALAPPDATA%\Programs (cole esse caminho na barra de endereço do Explorador de Arquivos).
+
+O QUE TEM
+
+Juntar, dividir e organizar páginas; converter PDF para Word, Excel, PowerPoint e JPG e o contrário; editar (texto e imagens), marca d'água, PDF/A, ocultar informações, recortar, preencher formulários e traduzir. Os arquivos novos são salvos com outro nome, então o original nunca é alterado.
+
+PROGRAMAS EXTRAS (só para algumas ferramentas)
+
+Word, Excel e PowerPoint para PDF usam o Microsoft Office do computador. Se não tiver Office, instale o LibreOffice, que é gratuito (libreoffice.org).
+
+PDF para PDF/A precisa do Ghostscript, também gratuito (ghostscript.com/releases, versão para Windows 64 bits).
+
+Traduzir PDF é a única ferramenta que usa internet, porque manda o texto para o Google Tradutor. Não use com documentos sigilosos.
