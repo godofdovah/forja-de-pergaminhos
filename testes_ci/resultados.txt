@@ -1,0 +1,53 @@
+=== Funções ===
+OK      Juntar                  0.0s  
+OK      Dividir                 0.0s  
+OK      Organizar               0.0s  
+OK      PDF -> Word             2.1s  
+OK      PDF -> Excel            0.2s  
+OK      PDF -> PowerPoint       0.4s  
+FALHOU  Word -> PDF             0.0s  RuntimeError: Para converter Word, Excel ou PowerPoint em PDF é preciso ter o Microsoft Office ou o LibreOffice (gratuito, libreoffice.org) instalado.
+
+Microsoft Office: (-2147221005, 'Invalid class string', None, None)
+LibreOffice: LibreOffice não encontrado
+FALHOU  Excel -> PDF            0.0s  RuntimeError: Para converter Word, Excel ou PowerPoint em PDF é preciso ter o Microsoft Office ou o LibreOffice (gratuito, libreoffice.org) instalado.
+
+Microsoft Office: (-2147221005, 'Invalid class string', None, None)
+LibreOffice: LibreOffice não encontrado
+FALHOU  PowerPoint -> PDF       0.0s  RuntimeError: Para converter Word, Excel ou PowerPoint em PDF é preciso ter o Microsoft Office ou o LibreOffice (gratuito, libreoffice.org) instalado.
+
+Microsoft Office: (-2147221005, 'Invalid class string', None, None)
+LibreOffice: LibreOffice não encontrado
+OK      PDF -> JPG              0.2s  
+OK      JPG -> PDF              0.0s  
+OK      Editar                  0.0s  
+OK      Marca d'água            0.0s  
+OK      PDF/A                   0.5s  
+OK      Ocultar                 0.0s  
+OK      Recortar                0.0s  
+OK      Formulários             0.0s  
+OK      PDF -> Word (processo)    2.4s  
+=== Uso do programa ===
+OK      Forjar mostra aviso na barra           Forjado! fluxo_junto.pdf
+OK      Aviso tem 'abrir arquivo'              
+OK      Avisa arquivo já forjado               ⚠ boletim.pdf já foi forjado aqui em 08/11 14:08
+OK      Pergaminho lembra os arquivos          
+OK      Conversor lembra o sentido             
+OK      PDF -> Word pelo programa              Forjado! boletim_convertido.docx
+OK      Barra mostra andamento por página      6 passos
+OK      Cancelar para a forja                  0.1s
+OK      Histórico registra as forjas           3 registros
+=== Telas ===
+BOTAO   02_Juntar: 237x54 'Forjar PDF'
+BOTAO   03_Dividir: 244x54 'Forjar divisão'
+BOTAO   05_Editar: 237x54 'Salvar PDF'
+BOTAO   06_WordPar: 360x54 'Forjar documento do Word'
+BOTAO   07_ExcelPar: 256x54 'Forjar planilha'
+BOTAO   08_PptPar: 299x54 'Forjar apresentação'
+BOTAO   09_JpgPar: 256x54 'Forjar imagens'
+BOTAO   10_MarcaDagua: 261x54 'Aplicar e salvar'
+BOTAO   11_PdfPdfa: 237x54 'Forjar PDF/A'
+BOTAO   12_Ocultar: 263x54 'Ocultar e salvar'
+BOTAO   13_Recortar: 273x54 'Recortar e salvar'
+BOTAO   14_Formularios: 237x54 'Salvar PDF'
+TELAS   15 fotos tiradas
+FIM
