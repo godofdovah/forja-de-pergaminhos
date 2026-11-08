@@ -64,6 +64,18 @@ jobs:
           path: testes_ci/
           retention-days: 14
 
+      - name: Guardar fotos do teste no repositório
+        if: github.ref == 'refs/heads/teste'
+        shell: pwsh
+        run: |
+          git config user.name "robo-da-forja"
+          git config user.email "robo-da-forja@users.noreply.github.com"
+          git checkout --orphan resultados
+          git rm -rf --cached . | Out-Null
+          git add -f testes_ci/*.png testes_ci/resultados.txt
+          git commit -m "Resultados do teste automático"
+          git push -f origin resultados
+
       - name: Comparar com a versão anterior
         if: github.ref == 'refs/heads/main'
         shell: pwsh
