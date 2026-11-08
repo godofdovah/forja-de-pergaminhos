@@ -192,6 +192,48 @@ def ativar_soltar(widget, ao_soltar, exts):
         pass
 
 
+def avisar_repetidos(widget, arqs):
+    """Pergunta ao programa se estes arquivos já foram forjados nesta ferramenta."""
+    w = widget
+    while w is not None and not isinstance(w, Ferramenta):
+        w = w.master
+    if w is not None and arqs:
+        try:
+            w.app.checar_repetidos(arqs, w)
+        except Exception:
+            pass
+
+
+class Destino(tk.Frame):
+    """Mostra para onde vão os arquivos forjados e deixa trocar a pasta."""
+
+    def __init__(self, pai, padrao="a mesma pasta de cada arquivo original"):
+        super().__init__(pai, bg=FUNDO)
+        self.pasta = None
+        self.padrao = padrao
+        tk.Label(self, text="Os arquivos forjados vão para:", bg=FUNDO, fg=TINTA, font=T(16)).pack(side="left")
+        self.l = tk.Label(self, text=padrao, bg=FUNDO, fg=TINTA2, font=F(16, "italic"))
+        self.l.pack(side="left", padx=(6, 12))
+        ttk.Button(self, text="Mudar pasta", command=self.mudar).pack(side="left")
+        self.volta = tk.Label(self, text="usar a pasta original", bg=FUNDO, fg=LACRE, font=F(15, "underline"),
+                              cursor="hand2")
+        self.volta.bind("<Button-1>", lambda e: self.definir(None))
+
+    def mudar(self):
+        p = filedialog.askdirectory(title="Para onde vão os arquivos forjados?")
+        if p:
+            self.definir(p)
+
+    def definir(self, p):
+        self.pasta = p
+        if p:
+            self.l.config(text=p, fg=TINTA)
+            self.volta.pack(side="left", padx=10)
+        else:
+            self.l.config(text=self.padrao, fg=TINTA2)
+            self.volta.pack_forget()
+
+
 class ListaArquivos(tk.Frame):
     def __init__(self, pai, tipos, titulo="Arquivos", altura=12):
         super().__init__(pai, bg=FUNDO)
@@ -219,6 +261,7 @@ class ListaArquivos(tk.Frame):
         self.incluir(arqs)
 
     def incluir(self, arqs):
+        avisar_repetidos(self, list(arqs))
         for a in arqs:
             self.arquivos.append(a)
             self.lista.insert("end", os.path.basename(a))
@@ -265,6 +308,7 @@ class ArquivoUnico(tk.Frame):
             self.definir(a)
 
     def definir(self, a):
+        avisar_repetidos(self, [a])
         self.caminho = a
         self.nome.config(text=os.path.basename(a), fg=TEXTO)
         if self.ao_escolher:
@@ -527,6 +571,8 @@ class Par(Ferramenta):
         self.miolo = tk.Frame(self.corpo, bg=FUNDO)
         self.miolo.pack(fill="both", expand=True)
         self.sub = None
+        self.subs = {}
+        self.lado = 0
         self.escolher(0)
 
     def escolher(self, k):
@@ -539,8 +585,11 @@ class Par(Ferramenta):
             a.config(fg=TINTA if ativo else TINTA3)
             b.config(fg=TINTA2 if ativo else "#9c8463")
         if self.sub is not None:
-            self.sub.destroy()
-        self.sub = self.lados[k][2](self.app, self.miolo, embutido=True)
+            self.sub.pack_forget()
+        if k not in self.subs:
+            self.subs[k] = self.lados[k][2](self.app, self.miolo, embutido=True)
+        self.lado = k
+        self.sub = self.subs[k]
         self.sub.pack(fill="both", expand=True)
 
 # =====================================================================
@@ -561,7 +610,7 @@ class Juntar(Ferramenta):
             return
         s = self.salvar_como(motor.nome_saida(arqs[0], "juntado", ".pdf"))
         if s:
-            self.app.tarefa(lambda: motor.juntar(arqs, s), s, "PDFs juntados!")
+            self.app.tarefa(lambda: motor.juntar(arqs, s), s, "PDFs juntados!", self, arqs)
 
 
 class Dividir(Ferramenta):
@@ -584,6 +633,8 @@ class Dividir(Ferramenta):
         self.paginas.pack(anchor="w")
         tk.Label(self.corpo, text="Exemplos:  1-3, 5, 8-10     ou   4-   (da 4 até o fim)",
                  bg=FUNDO, fg=CINZA, font=F(15)).pack(anchor="w")
+        self.destino = Destino(self.corpo, "a mesma pasta do PDF original")
+        self.destino.pack(anchor="w", pady=(10, 0))
         self.botao_principal(self.corpo, "Forjar divisão", self.rodar)
 
     def abriu(self, c):
@@ -594,16 +645,16 @@ class Dividir(Ferramenta):
         if not self.precisa(c, "Escolha um PDF."):
             return
         m, pg = self.modo.get(), self.paginas.get()
-        pasta = os.path.dirname(c)
+        pasta = self.destino.pasta or os.path.dirname(c)
         if m == "todas":
-            self.app.tarefa(lambda: motor.dividir_todas(c, pasta), pasta, "PDF dividido!")
+            self.app.tarefa(lambda: motor.dividir_todas(c, pasta), pasta, "PDF dividido!", self, [c])
         elif self.precisa(pg.strip(), "Diga quais páginas (ex.: 1-3, 5)."):
             if m == "intervalos":
-                self.app.tarefa(lambda: motor.dividir_intervalos(c, pg, pasta), pasta, "PDF dividido!")
+                self.app.tarefa(lambda: motor.dividir_intervalos(c, pg, pasta), pasta, "PDF dividido!", self, [c])
             else:
                 s = self.salvar_como(motor.nome_saida(c, "paginas", ".pdf"))
                 if s:
-                    self.app.tarefa(lambda: motor.extrair_paginas(c, pg, s), s, "Páginas extraídas!")
+                    self.app.tarefa(lambda: motor.extrair_paginas(c, pg, s), s, "Páginas extraídas!", self, [c])
 
 
 class Organizar(Ferramenta):
@@ -706,27 +757,33 @@ class Organizar(Ferramenta):
         if s:
             ordem = [i for i, _ in self.itens]
             rots = [r for _, r in self.itens]
-            self.app.tarefa(lambda: motor.organizar(c, ordem, rots, s), s, "PDF organizado!")
+            self.app.tarefa(lambda: motor.organizar(c, ordem, rots, s), s, "PDF organizado!", self, [c])
 
 
 class Conversor(Ferramenta):
-    """Converte vários arquivos de uma vez; o resultado fica ao lado do original."""
+    """Converte vários arquivos de uma vez."""
     tipos = T_PDF
     ext_saida = ".pdf"
     sufixo = "convertido"
     aviso = ""
     acao_txt = "Forjar"
+    pesado = None   # nome da função do motor que roda em processo separado (pode cancelar)
 
-    def converter(self, entrada, saida):
-        raise NotImplementedError
+    def argumentos(self, e, s):
+        return (e, s)
+
+    def converter(self, e, s, prog=None):
+        return motor.rodar_em_processo(self.pesado, self.argumentos(e, s), prog, self.app.cancelado)
 
     def montar(self):
-        self.lista = ListaArquivos(self.corpo, self.tipos, "Arquivos para converter", 12)
+        self.lista = ListaArquivos(self.corpo, self.tipos, "Arquivos para converter", 10)
         self.lista.pack(fill="both", expand=True)
         self.extras(self.corpo)
         if self.aviso:
             tk.Label(self.corpo, text=self.aviso, bg=FUNDO, fg=CINZA, font=F(15),
                      wraplength=850, justify="left").pack(anchor="w", pady=(8, 0))
+        self.destino = Destino(self.corpo)
+        self.destino.pack(anchor="w", pady=(8, 0))
         self.botao_principal(self.corpo, self.acao_txt, self.rodar)
 
     def extras(self, pai):
@@ -736,15 +793,31 @@ class Conversor(Ferramenta):
         arqs = list(self.lista.arquivos)
         if not self.precisa(arqs, "Adicione pelo menos um arquivo."):
             return
+        pasta = self.destino.pasta
+        total = len(arqs)
 
         def trabalho():
             saidas = []
-            for n, a in enumerate(arqs, 1):
-                self.app.status(f"Convertendo {n} de {len(arqs)}: {os.path.basename(a)}")
-                saidas.append(self.converter(a, motor.nome_saida(a, self.sufixo, self.ext_saida)))
+            for n, a in enumerate(arqs):
+                if self.app.cancelado():
+                    raise motor.Cancelado()
+                nome = os.path.basename(a)
+                base = nome if total == 1 else f"arquivo {n + 1} de {total} · {nome}"
+                self.app.progresso(n / total if total > 1 else None, base)
+                out = motor.nome_saida(a, self.sufixo, self.ext_saida, pasta)
+
+                def prog(f, t, n=n, base=base):
+                    self.app.progresso((n + f) / total, f"{base} · {t}")
+                try:
+                    r = self.converter(a, out, prog)
+                except motor.Cancelado:
+                    if os.path.isfile(out):
+                        os.remove(out)
+                    raise
+                saidas.append(r)
             return saidas
-        alvo = os.path.dirname(arqs[0])
-        self.app.tarefa(trabalho, alvo, f"{len(arqs)} arquivo(s) convertido(s)! Estão na mesma pasta dos originais.")
+        alvo = pasta or os.path.dirname(arqs[0])
+        self.app.tarefa(trabalho, alvo, f"{total} arquivo(s) forjado(s)", self, arqs)
 
 
 class PdfWord(Conversor):
@@ -754,8 +827,7 @@ class PdfWord(Conversor):
     ext_saida = ".docx"
     aviso = "Funciona melhor com PDFs de texto. PDF escaneado (foto de papel) vira imagem dentro do Word."
 
-    def converter(self, e, s):
-        return motor.pdf_para_word(e, s)
+    pesado = "pdf_para_word"
 
 
 class PdfPpt(Conversor):
@@ -765,8 +837,7 @@ class PdfPpt(Conversor):
     ext_saida = ".pptx"
     aviso = "Os slides ficam idênticos ao PDF (como imagem). O texto de cada página vai nas anotações do slide."
 
-    def converter(self, e, s):
-        return motor.pdf_para_powerpoint(e, s)
+    pesado = "pdf_para_powerpoint"
 
 
 class PdfExcel(Conversor):
@@ -776,16 +847,17 @@ class PdfExcel(Conversor):
     ext_saida = ".xlsx"
     aviso = "Se não achar tabela, o texto do PDF vai linha por linha numa aba chamada Texto."
 
-    def converter(self, e, s):
-        return motor.pdf_para_excel(e, s)[0]
+    pesado = "pdf_para_excel"
+
+    def converter(self, e, s, prog=None):
+        return Conversor.converter(self, e, s, prog)[0]
 
 
 class OfficePdf(Conversor):
     aviso = ("Usa o Microsoft Office do seu computador. Se não tiver, usa o LibreOffice "
              "(gratuito, libreoffice.org).")
 
-    def converter(self, e, s):
-        return motor.office_para_pdf(e, s)
+    pesado = "office_para_pdf"
 
 
 class WordPdf(OfficePdf):
@@ -825,8 +897,10 @@ class PdfPdfa(Conversor):
         for v, t in (("1", "PDF/A-1b"), ("2", "PDF/A-2b (recomendado)"), ("3", "PDF/A-3b")):
             ttk.Radiobutton(f, text=t, value=v, variable=self.nivel).pack(side="left", padx=(0, 12))
 
-    def converter(self, e, s):
-        return motor.pdf_para_pdfa(e, s, int(self.nivel.get()))
+    pesado = "pdf_para_pdfa"
+
+    def argumentos(self, e, s):
+        return (e, s, int(self.nivel.get()))
 
 
 class PdfJpg(Conversor):
@@ -853,8 +927,8 @@ class PdfJpg(Conversor):
         self.qual.set("Normal (150 dpi)")
         self.qual.pack(side="left", padx=4)
 
-    def converter(self, e, s):
-        pasta = os.path.dirname(e)
+    def converter(self, e, s, prog=None):
+        pasta = os.path.dirname(s)
         if self.modo.get() == "figuras":
             return motor.extrair_imagens_embutidas(e, pasta)
         dpi = int(self.qual.get().split("(")[1].split()[0])
@@ -888,7 +962,7 @@ class JpgPdf(Ferramenta):
         if s:
             m = {"Sem margem": 0, "Pequena": 20, "Grande": 45}[self.marg.get()]
             t = self.tam.get()
-            self.app.tarefa(lambda: motor.imagens_para_pdf(arqs, s, t, m), s, "PDF criado!")
+            self.app.tarefa(lambda: motor.imagens_para_pdf(arqs, s, t, m), s, "PDF criado!", self, arqs)
 
 
 class Editar(ComVisualizador):
@@ -984,7 +1058,7 @@ class Editar(ComVisualizador):
                 if tmp != c:
                     os.remove(tmp)
             return s
-        self.app.tarefa(trabalho, s, "PDF editado!")
+        self.app.tarefa(trabalho, s, "PDF editado!", self, [c])
 
 
 class MarcaDagua(ComVisualizador):
@@ -1067,7 +1141,7 @@ class MarcaDagua(ComVisualizador):
             return
         s = self.salvar_como(motor.nome_saida(c, "marca", ".pdf"))
         if s:
-            self.app.tarefa(lambda: self.aplicar(c, s), s, "Marca d'água aplicada!")
+            self.app.tarefa(lambda: self.aplicar(c, s), s, "Marca d'água aplicada!", self, [c])
 
 
 class Ocultar(ComVisualizador):
@@ -1116,7 +1190,7 @@ class Ocultar(ComVisualizador):
             return
         s = self.salvar_como(motor.nome_saida(c, "oculto", ".pdf"))
         if s:
-            self.app.tarefa(lambda: motor.ocultar(c, s, self.areas, termos)[0], s, "Informações ocultadas!")
+            self.app.tarefa(lambda: motor.ocultar(c, s, self.areas, termos)[0], s, "Informações ocultadas!", self, [c])
 
 
 class Recortar(ComVisualizador):
@@ -1148,7 +1222,7 @@ class Recortar(ComVisualizador):
         s = self.salvar_como(motor.nome_saida(c, "recortado", ".pdf"))
         if s:
             pgs = None if self.onde.get() == "todas" else [self.viz.pagina]
-            self.app.tarefa(lambda: motor.recortar(c, s, *self.ret, paginas=pgs), s, "PDF recortado!")
+            self.app.tarefa(lambda: motor.recortar(c, s, *self.ret, paginas=pgs), s, "PDF recortado!", self, [c])
 
 
 class Formularios(ComVisualizador):
@@ -1225,38 +1299,7 @@ class Formularios(ComVisualizador):
                 atual = destino
             os.replace(atual, s)
             return s
-        self.app.tarefa(trabalho, s, "Formulário salvo!")
-
-
-class Traduzir(Ferramenta):
-    titulo = "Traduzir PDF"
-    descricao = "Traduz o texto do PDF mantendo o layout, as imagens e os desenhos no lugar."
-
-    def montar(self):
-        self.arq = ArquivoUnico(self.corpo)
-        self.arq.pack(anchor="w")
-        f = tk.Frame(self.corpo, bg=FUNDO)
-        f.pack(anchor="w", pady=10)
-        tk.Label(f, text="Traduzir para:", bg=FUNDO).pack(side="left")
-        self.idioma = ttk.Combobox(f, values=list(motor.IDIOMAS), state="readonly", width=14)
-        self.idioma.set("Português")
-        self.idioma.pack(side="left", padx=6)
-        tk.Label(self.corpo, text="Esta é a única ferramenta que precisa de internet: o texto é enviado "
-                                  "ao Google Tradutor. Não use com documentos sigilosos.",
-                 bg=FUNDO, fg=CINZA, font=F(15), wraplength=700, justify="left").pack(anchor="w")
-        self.botao_principal(self.corpo, "Forjar tradução", self.rodar)
-
-    def rodar(self):
-        c = self.arq.caminho
-        if not self.precisa(c, "Escolha um PDF."):
-            return
-        cod = motor.IDIOMAS[self.idioma.get()]
-        s = self.salvar_como(motor.nome_saida(c, cod, ".pdf"))
-        if s:
-            prog = lambda i, n: self.app.status(f"Traduzindo página {i} de {n}...")
-            self.app.tarefa(lambda: motor.traduzir(c, s, cod, prog), s, "PDF traduzido!")
-
-
+        self.app.tarefa(trabalho, s, "Formulário salvo!", self, [c])
 
 
 # ---------------------------------------------------------------- conversores em par
@@ -1308,7 +1351,6 @@ PdfPdfa.resumo = "Formato de arquivamento do SEI e editais."
 Ocultar.resumo = "Apaga de vez o que é sigiloso."
 Recortar.resumo = "Corta as margens da página."
 Formularios.resumo = "Preenche ou cria campos."
-Traduzir.resumo = "Traduz mantendo o layout."
 PdfPdfa.descricao = ("Gera a versão PDF/A, o formato de arquivamento que muitos sistemas "
                      "(SEI, tribunais, editais) pedem.")
 
@@ -1317,7 +1359,7 @@ FERRAMENTAS = [
     (Editar, "✒", "roxo"), (WordPar, "W", "azul"), (ExcelPar, "X", "verde"),
     (PptPar, "P", "laranja"), (JpgPar, "▣", "ouro"), (MarcaDagua, "≋", "roxo"),
     (PdfPdfa, "A", "azul"), (Ocultar, "▬", "preto"), (Recortar, "✂", "roxo"),
-    (Formularios, "☰", "roxo"), (Traduzir, "文", "azul"),
+    (Formularios, "☰", "roxo"),
 ]
 
 ESTADOS = {
@@ -1325,9 +1367,80 @@ ESTADOS = {
     "acesa": ("#e0661c", "#ffb060", "Forjando..."),
     "pronta": ("#d9a93a", "#ffe08a", "Forjado!"),
     "falha": ("#b3261e", "#ff7a6a", "A forja falhou"),
+    "cancelada": ("#8a8178", "#c9bfb2", "Forja cancelada · nada foi alterado"),
+    "aviso": ("#c9a03a", "#f2d27a", ""),
 }
 
 CW, CH = 344, 190       # tamanho das imagens dos pergaminhos do salão
+
+
+class Historico(Ferramenta):
+    titulo = "Histórico de forjas"
+    descricao = "Tudo o que você já forjou neste computador. Dê dois cliques numa linha para abrir o resultado."
+    lembrar = False
+
+    def montar(self):
+        s = ttk.Style(self)
+        s.configure("Hist.Treeview", background=CAMPO, fieldbackground=CAMPO, foreground=TINTA, font=F(16),
+                    rowheight=30, bordercolor="#a9875a")
+        s.configure("Hist.Treeview.Heading", background=PAPEL_ESC, foreground=TINTA, font=T(16), relief="flat")
+        s.map("Hist.Treeview", background=[("selected", "#e2c88f")], foreground=[("selected", TINTA)])
+        cols = ("quando", "ferramenta", "origem", "resultado", "situacao")
+        caixa = tk.Frame(self.corpo, bg=FUNDO)
+        caixa.pack(fill="both", expand=True)
+        self.tv = ttk.Treeview(caixa, columns=cols, show="headings", style="Hist.Treeview")
+        for c, t, w in zip(cols, ("Quando", "Ferramenta", "Arquivo de origem", "Arquivo forjado", "Situação"),
+                           (150, 190, 300, 300, 120)):
+            self.tv.heading(c, text=t, anchor="w")
+            self.tv.column(c, width=w, anchor="w", stretch=c in ("origem", "resultado"))
+        rol = ttk.Scrollbar(caixa, orient="vertical", command=self.tv.yview)
+        self.tv.configure(yscrollcommand=rol.set)
+        self.tv.pack(side="left", fill="both", expand=True)
+        rol.pack(side="right", fill="y")
+        self.tv.tag_configure("falhou", foreground=LACRE)
+        self.tv.bind("<Double-1>", lambda e: self.abrir("arquivo"))
+        bar = tk.Frame(self.corpo, bg=FUNDO)
+        bar.pack(fill="x", pady=(12, 0))
+        ttk.Button(bar, text="Abrir arquivo", command=lambda: self.abrir("arquivo")).pack(side="left")
+        ttk.Button(bar, text="Abrir pasta", command=lambda: self.abrir("pasta")).pack(side="left", padx=8)
+        ttk.Button(bar, text="Limpar histórico", command=self.limpar).pack(side="right")
+        self.preencher()
+
+    def preencher(self):
+        self.tv.delete(*self.tv.get_children())
+        self.linhas = {}
+        for k, h in enumerate(reversed(self.app.ler_historico())):
+            origem = ", ".join(os.path.basename(x) for x in h.get("entradas", [])) or "-"
+            saidas = h.get("saidas", [])
+            res = os.path.basename(saidas[0]) if saidas else "-"
+            if len(saidas) > 1:
+                res += f" (+{len(saidas) - 1})"
+            sit = "forjado" if h.get("ok") else ("cancelado" if h.get("cancelado") else "falhou")
+            iid = self.tv.insert("", "end", values=(h.get("quando", ""), h.get("ferramenta", ""), origem, res, sit),
+                                 tags=() if h.get("ok") else ("falhou",))
+            self.linhas[iid] = h
+        if not self.linhas:
+            self.tv.insert("", "end", values=("", "Nada forjado ainda.", "", "", ""))
+
+    def abrir(self, oque):
+        sel = self.tv.selection()
+        if not sel or sel[0] not in self.linhas:
+            return
+        saidas = self.linhas[sel[0]].get("saidas", [])
+        if not saidas:
+            return
+        alvo = saidas[0]
+        if oque == "pasta" or os.path.isdir(alvo):
+            alvo = alvo if os.path.isdir(alvo) else os.path.dirname(alvo)
+        if os.path.exists(alvo):
+            motor.abrir(alvo)
+        else:
+            messagebox.showinfo("Não encontrado", "Esse arquivo não está mais nesse lugar (foi movido ou apagado).")
+
+    def limpar(self):
+        if messagebox.askyesno("Limpar histórico", "Apagar todo o histórico de forjas? Os arquivos não são apagados."):
+            self.app.salvar_historico([])
+            self.preencher()
 
 
 # =====================================================================
@@ -1337,6 +1450,7 @@ class App(tk.Tk):
     def __init__(self):
         carregar_fontes()
         super().__init__()
+        _cache_img.clear()
         global TEM_DND, TIT, TXT
         if TkinterDnD is not None:
             try:
@@ -1365,25 +1479,45 @@ class App(tk.Tk):
         except Exception:
             pass
 
-        self._arq_config = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
-                                        "ForjaDePergaminhos", "config.json")
+        self._pasta_config = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "ForjaDePergaminhos")
+        self._arq_config = os.path.join(self._pasta_config, "config.json")
+        self._arq_hist = os.path.join(self._pasta_config, "historico.json")
         self.tema = self._ler_config().get("tema", "escuro")
         self._fila = queue.Queue()
         self._ocupado = False
+        self._cancelar = threading.Event()
+        self._frac = None
         self._prog = None
         self._anim_fase = 0
         self._agendado = None
+        self._fundo_cache = {}
+        self._folha_cache = {}
+        self._digitais = {}
         self._fundo_img = None
         self._folha_img = None
         self.tela = None
         self.area = None
+        self.atual = None
+        self.atual_cls = None
+        self.instancias = {}       # cada pergaminho lembra como você deixou
+        self._forja_cls = None
         self.estilos()
         self.montar_moldura()
         self.aplicar_tema()
         self.inicio()
-        self.after(100, self._ler_fila)
+        self._id_fila = self.after(100, self._ler_fila)
 
-    # ---------------- configuração
+    def destroy(self):
+        for job in (getattr(self, "_id_fila", None), self._prog, self._agendado):
+            if job:
+                try:
+                    self.after_cancel(job)
+                except Exception:
+                    pass
+        self._prog = None
+        super().destroy()
+
+    # ---------------- configuração e histórico
     def _ler_config(self):
         try:
             with open(self._arq_config, encoding="utf-8") as f:
@@ -1393,11 +1527,53 @@ class App(tk.Tk):
 
     def _salvar_config(self):
         try:
-            os.makedirs(os.path.dirname(self._arq_config), exist_ok=True)
+            os.makedirs(self._pasta_config, exist_ok=True)
             with open(self._arq_config, "w", encoding="utf-8") as f:
                 json.dump({"tema": self.tema}, f)
         except Exception:
             pass
+
+    def ler_historico(self):
+        try:
+            with open(self._arq_hist, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+
+    def salvar_historico(self, lista):
+        try:
+            os.makedirs(self._pasta_config, exist_ok=True)
+            with open(self._arq_hist, "w", encoding="utf-8") as f:
+                json.dump(lista[-2000:], f, ensure_ascii=False, indent=0)
+        except Exception:
+            pass
+
+    def digital(self, caminho):
+        try:
+            st = os.stat(caminho)
+            chave = (caminho, st.st_size, st.st_mtime)
+            if chave not in self._digitais:
+                self._digitais[chave] = motor.impressao_digital(caminho)
+            return self._digitais[chave]
+        except Exception:
+            return None
+
+    def checar_repetidos(self, arqs, ferramenta):
+        hist = self.ler_historico()
+        if not hist:
+            return
+        chave = ferramenta.__class__.__name__
+        for a in arqs:
+            d = self.digital(a)
+            if not d:
+                continue
+            for h in reversed(hist):
+                if h.get("chave") == chave and h.get("ok") and d in h.get("digitais", []):
+                    saidas = [x for x in h.get("saidas", []) if os.path.exists(x)]
+                    links = [("abrir resultado", lambda s=saidas[0]: motor.abrir(s))] if saidas else []
+                    self.estado("aviso", f"⚠ {os.path.basename(a)} já foi forjado aqui em {h.get('quando', '')}",
+                                links)
+                    return
 
     # ---------------- estilos
     def estilos(self):
@@ -1408,16 +1584,16 @@ class App(tk.Tk):
             ("Button.label", {"sticky": "nsew"})]})]}
         s.element_create("Tabua.border", "image", img("tabua_normal.png"),
                          ("pressed", img("tabua_pressed.png")), ("active", img("tabua_hover.png")),
-                         border=(12, 10), sticky="nsew", width=36, height=34)
+                         border=(12, 6), sticky="nsew", width=36, height=34)
         s.element_create("Selo.border", "image", img("acao_normal.png"),
                          ("pressed", img("acao_pressed.png")), ("active", img("acao_hover.png")),
-                         border=(27, 26), sticky="nsew", width=60, height=54)
+                         border=(28, 6), sticky="nsew", width=80, height=54)
         for nome in ("TButton", "Acao.TButton"):
             s.layout(nome, [("Tabua.border", filhos)])
-            s.configure(nome, foreground="#f6e7c8", font=T(16), padding=(14, 3), anchor="center")
+            s.configure(nome, foreground="#f6e7c8", font=T(16), padding=(14, 2), anchor="center")
             s.map(nome, foreground=[("disabled", "#b9a27c")])
         s.layout("Grande.TButton", [("Selo.border", filhos)])
-        s.configure("Grande.TButton", foreground="#fbe9d2", font=T(21), padding=(34, 2), anchor="center")
+        s.configure("Grande.TButton", foreground="#fbe9d2", font=T(21), padding=(30, 4), anchor="center")
         for nome in ("TRadiobutton", "TCheckbutton"):
             s.configure(nome, background=PAPEL, foreground=TINTA2, font=F(17), indicatorcolor=CAMPO,
                         indicatorbackground=CAMPO, upperbordercolor="#a9875a", lowerbordercolor="#a9875a")
@@ -1452,22 +1628,26 @@ class App(tk.Tk):
         self.chave = tk.Label(self.topo, cursor="hand2", bd=0)
         self.chave.pack(side="right", padx=(8, 26))
         self.chave.bind("<Button-1>", lambda e: self.trocar_tema())
-        self.l_tema = tk.Label(self.topo, font=T(15))
+        self.l_tema = tk.Label(self.topo, font=T(15), cursor="hand2")
         self.l_tema.pack(side="right")
         self.l_tema.bind("<Button-1>", lambda e: self.trocar_tema())
+        self.b_hist = ttk.Button(self.topo, text="Histórico", command=self.abrir_historico)
+        self.b_hist.pack(side="right", padx=(0, 24))
         self.linha_topo = tk.Frame(self, height=2)
         self.linha_topo.pack(fill="x")
 
-        self.rodape = tk.Frame(self, height=34)
+        self.rodape = tk.Frame(self, height=36)
         self.rodape.pack(side="bottom", fill="x")
         self.rodape.pack_propagate(False)
         self.linha_rod = tk.Frame(self, height=1)
         self.linha_rod.pack(side="bottom", fill="x")
-        self.brasa = tk.Canvas(self.rodape, width=22, height=22, highlightthickness=0)
+        self.brasa = tk.Canvas(self.rodape, width=24, height=24, highlightthickness=0)
         self.brasa.pack(side="left", padx=(14, 6))
         self.l_status = tk.Label(self.rodape, font=T(15), anchor="w")
         self.l_status.pack(side="left")
-        self.metal = tk.Canvas(self.rodape, width=280, height=14, highlightthickness=0)
+        self.metal = tk.Canvas(self.rodape, width=240, height=14, highlightthickness=0)
+        self.links = tk.Frame(self.rodape)
+        self.links.pack(side="left", padx=10)
         versao = ""
         try:
             with open(os.path.join(PASTA, "versao.txt"), encoding="utf-8") as f:
@@ -1485,6 +1665,7 @@ class App(tk.Tk):
         self.cv.bind("<Button-5>", lambda e: self._rolar(e, 1))
         self._estado = "fria"
         self._texto_status = ESTADOS["fria"][2]
+        self._links_atuais = []
 
     def _rolar(self, e, d=None):
         if self.tela != "salao":
@@ -1505,28 +1686,31 @@ class App(tk.Tk):
     def aplicar_tema(self):
         t = TEMAS[self.tema]
         for w in (self.topo, self.l_logo, self.l_nome, self.l_tema, self.chave, self.rodape, self.brasa,
-                  self.l_status, self.metal, self.l_versao):
+                  self.l_status, self.metal, self.l_versao, self.links):
             w.config(bg=t["barra"])
         self.l_nome.config(fg=t["titulo"])
         self.l_tema.config(fg=t["sub"], text=t["rotulo"])
-        self.l_status.config(fg=t["sub"])
         self.l_versao.config(fg=t["sub"])
         self.linha_topo.config(bg=t["borda"])
         self.linha_rod.config(bg=t["borda"])
         self.chave.config(image=img(f"chave_{self.tema}.png"))
         self.cv.config(bg=t["fundo"])
-        self.estado(self._estado, self._texto_status)
+        self.estado(self._estado, self._texto_status, self._links_atuais)
 
-    # ---------------- fundo
+    # ---------------- fundo (guardado para não refazer à toa)
     def desenhar_fundo(self):
         w, h = max(1, self.cv.winfo_width()), max(1, self.cv.winfo_height())
-        if self.tela == "salao":
-            h = max(h, int(float(self.cv.cget("scrollregion").split()[3])) if self.cv.cget("scrollregion") else h)
-        base = pil(f"fundo_{self.tema}.jpg")
-        esc = max(w / base.width, h / base.height, 1)
-        im = base.resize((int(base.width * esc) + 1, int(base.height * esc) + 1), Image.BILINEAR) if esc > 1 else base
-        im = im.crop((0, 0, w, h))
-        self._fundo_img = ImageTk.PhotoImage(im)
+        if self.tela == "salao" and self.cv.cget("scrollregion"):
+            h = max(h, int(float(self.cv.cget("scrollregion").split()[3])))
+        chave = (self.tema, w, h)
+        if chave not in self._fundo_cache:
+            base = pil(f"fundo_{self.tema}.jpg")
+            esc = max(w / base.width, h / base.height, 1)
+            im = base.resize((int(base.width * esc) + 1, int(base.height * esc) + 1), Image.BILINEAR) if esc > 1 else base
+            if len(self._fundo_cache) > 6:
+                self._fundo_cache.clear()
+            self._fundo_cache[chave] = ImageTk.PhotoImage(im.crop((0, 0, w, h)))
+        self._fundo_img = self._fundo_cache[chave]
         self.cv.delete("fundo")
         self.cv.create_image(0, 0, anchor="nw", image=self._fundo_img, tags="fundo")
         self.cv.tag_lower("fundo")
@@ -1534,7 +1718,7 @@ class App(tk.Tk):
     def _redimensionou(self, e=None):
         if self._agendado:
             self.after_cancel(self._agendado)
-        self._agendado = self.after(120, self._refazer)
+        self._agendado = self.after(150, self._refazer)
 
     def _refazer(self):
         self._agendado = None
@@ -1546,16 +1730,17 @@ class App(tk.Tk):
     # ---------------- salão
     def limpar(self):
         if self.area is not None:
-            self.area.destroy()
+            if getattr(self.atual, "lembrar", True) is False:
+                self.area.destroy()
+                self.atual = None
             self.area = None
         self.cv.delete("all")
 
     def inicio(self):
         self.limpar()
         self.tela = "salao"
+        self.atual_cls = None
         self.voltar.pack_forget()
-        if not self._ocupado:
-            self.estado("fria")
         self.cv.yview_moveto(0)
         self.desenhar_salao()
 
@@ -1592,6 +1777,8 @@ class App(tk.Tk):
                            width=172, tags=(tag,))
             cv.create_text(x + 110, y + 96, text=cls.resumo, anchor="nw", font=F(15, "bold"), fill=TINTA2,
                            width=168, tags=(tag,))
+            if cls is self._forja_cls and self._ocupado:
+                cv.create_text(x + 290, y + 60, text="🔥", font=F(18), tags=(tag,))
             normal, brilho = img(f"cartao{i % 4}.png"), img(f"cartao{i % 4}_brilho.png")
             cv.tag_bind(tag, "<Enter>", lambda e, b=base, im=brilho: (cv.itemconfig(b, image=im),
                                                                      cv.config(cursor="hand2")))
@@ -1615,64 +1802,107 @@ class App(tk.Tk):
         self.tela = "animando"
         self.desenhar_fundo()
         fim = self._retangulo_folha()
-        quadros = []
-        for k in range(1, 8):
-            t = 1 - (1 - k / 7) ** 2.2
+        for k in range(1, 7):
+            t = 1 - (1 - k / 6) ** 2.2
             r = [a + (b - a) * t for a, b in zip(ini, fim)]
-            quadros.append(r)
-        for r in quadros:
             im = ImageTk.PhotoImage(compor_folha(r[2] - r[0], r[3] - r[1], rapido=True))
             cv.delete("anim")
             cv.create_image(r[0], r[1], anchor="nw", image=im, tags="anim")
             cv._anim = im
             cv.update_idletasks()
             cv.update()
-            self.after(14)
         self.montar_ferramenta(cls)
 
     def montar_ferramenta(self, cls):
-        self.cv.delete("all")
+        self.limpar()
         self.tela = "ferramenta"
+        self.atual_cls = cls
         self.voltar.pack(side="left", padx=26)
-        self.area = tk.Frame(self.cv, bg=PAPEL)
-        self.atual = cls(self, self.area)
-        self.atual.pack(fill="both", expand=True)
+        if getattr(cls, "lembrar", True) and cls in self.instancias:
+            self.area, self.atual = self.instancias[cls]
+        else:
+            self.area = tk.Frame(self.cv, bg=PAPEL)
+            self.atual = cls(self, self.area)
+            self.atual.pack(fill="both", expand=True)
+            if getattr(cls, "lembrar", True):
+                self.instancias[cls] = (self.area, self.atual)
         self.desenhar_folha()
+
+    def ir_para(self, cls):
+        if cls is None:
+            return
+        self.montar_ferramenta(cls)
+
+    def abrir_historico(self):
+        self.montar_ferramenta(Historico)
 
     def desenhar_folha(self):
         cv = self.cv
         x0, y0, x1, y1 = self._retangulo_folha()
         w, h = x1 - x0, y1 - y0
         self.desenhar_fundo()
-        self._folha_img = ImageTk.PhotoImage(compor_folha(w, h))
+        if (w, h) not in self._folha_cache:
+            if len(self._folha_cache) > 3:
+                self._folha_cache.clear()
+            self._folha_cache[(w, h)] = ImageTk.PhotoImage(compor_folha(w, h))
+        self._folha_img = self._folha_cache[(w, h)]
         cv.delete("folha")
         cv.create_image(x0, y0, anchor="nw", image=self._folha_img, tags="folha")
         rh = max(18, min(40, int(h * 0.06)))
         ax0, ay0 = x0 + 18 + 44, y0 + rh + 16
         ax1, ay1 = x1 - 18 - 44, y1 - rh - 12
         cv.delete("janela")
-        cv.create_window(ax0, ay0, anchor="nw", window=self.area, width=ax1 - ax0, height=ay1 - ay0,
-                         tags="janela")
-        cv.tag_raise("janela")
+        if self.area is not None:
+            cv.create_window(ax0, ay0, anchor="nw", window=self.area, width=ax1 - ax0, height=ay1 - ay0,
+                             tags="janela")
+            cv.tag_raise("janela")
 
     # ---------------- status da forja
-    def estado(self, tipo, texto=None):
+    def _link(self, texto, acao, cor=None):
+        t = TEMAS[self.tema]
+        lb = tk.Label(self.links, text=texto, font=T(14, "underline"), cursor="hand2",
+                      bg=t["barra"], fg=cor or t["titulo"])
+        lb.pack(side="left", padx=8)
+        lb.bind("<Button-1>", lambda e: acao())
+        return lb
+
+    def estado(self, tipo, texto=None, links=None):
         self._estado = tipo
         self._texto_status = texto or ESTADOS[tipo][2]
+        self._links_atuais = links or []
         cor, brilho, _ = ESTADOS[tipo]
         t = TEMAS[self.tema]
-        b = self.brasa
-        b.delete("all")
-        if brilho:
-            b.create_oval(1, 1, 21, 21, fill="", outline=brilho, width=2)
-        b.create_oval(5, 5, 17, 17, fill=cor, outline="#000000" if tipo == "fria" else brilho)
-        self.l_status.config(text=self._texto_status, fg=t["titulo"] if tipo != "fria" else t["sub"])
+        self._desenhar_brasa(cor, brilho, 1)
+        self.l_status.config(text=self._texto_status, fg=t["sub"] if tipo in ("fria", "cancelada") else t["titulo"])
+        for w in self.links.winfo_children():
+            w.destroy()
         if tipo == "acesa":
-            self.metal.pack(side="left", padx=14, after=self.l_status)
+            self.metal.pack(side="left", padx=(14, 0), after=self.l_status)
+            self._link("✕ cancelar", self.cancelar, "#e07a6a")
+            if self._forja_cls is not None:
+                self._link("↩ ir para a forja", lambda: self.ir_para(self._forja_cls))
             if self._prog is None:
                 self._animar_metal()
         else:
             self.metal.pack_forget()
+        for rot, acao in self._links_atuais:
+            self._link(rot, acao)
+        if tipo in ("pronta", "falha", "aviso"):
+            self._piscar(cor, brilho, 6)
+
+    def _desenhar_brasa(self, cor, brilho, forca):
+        b = self.brasa
+        b.delete("all")
+        if brilho:
+            r = 1 + int(3 * (1 - forca))
+            b.create_oval(r, r, 23 - r, 23 - r, fill="", outline=brilho, width=2)
+        b.create_oval(6, 6, 18, 18, fill=cor, outline="#000000" if not brilho else brilho)
+
+    def _piscar(self, cor, brilho, vezes):
+        if vezes <= 0 or self._estado not in ("pronta", "falha", "aviso"):
+            return
+        self._desenhar_brasa(cor, brilho, 0 if vezes % 2 else 1)
+        self.after(220, lambda: self._piscar(cor, brilho, vezes - 1))
 
     def _animar_metal(self):
         if self._estado != "acesa":
@@ -1680,71 +1910,130 @@ class App(tk.Tk):
             return
         m = self.metal
         m.delete("all")
-        w, h = 280, 14
+        w, h = 240, 14
         m.create_rectangle(0, 0, w - 1, h - 1, fill="#2a2620", outline="#6b5530")
-        frac = self._progresso_frac()
-        if frac is None:  # sem número: brilho correndo
+        if self._frac is None:
             self._anim_fase = (self._anim_fase + 7) % (w + 80)
             x = self._anim_fase - 80
             for i, cor in enumerate(("#8e2a0a", "#c4471a", "#e0661c", "#ffb060", "#ffd27a")):
                 m.create_rectangle(max(1, x + i * 12), 2, min(w - 2, x + 80 - i * 12), h - 3, fill=cor, outline="")
         else:
-            fim = max(2, int((w - 3) * frac))
-            passos = 6
-            for i in range(passos):
-                cor = ("#8e2a0a", "#b33a12", "#d0561a", "#e0661c", "#f39a45", "#ffd27a")[i]
-                m.create_rectangle(1 + fim * i // passos, 2, 1 + fim * (i + 1) // passos, h - 3, fill=cor, outline="")
+            fim = max(2, int((w - 3) * self._frac))
+            cores = ("#8e2a0a", "#b33a12", "#d0561a", "#e0661c", "#f39a45", "#ffd27a")
+            for i, cor in enumerate(cores):
+                m.create_rectangle(1 + fim * i // 6, 2, 1 + fim * (i + 1) // 6, h - 3, fill=cor, outline="")
         self._prog = self.after(40, self._animar_metal)
 
-    def _progresso_frac(self):
-        r = re.search(r"(\d+)\s+de\s+(\d+)", self._texto_status or "")
-        if r and int(r.group(2)) > 0:
-            return min(1, int(r.group(1)) / int(r.group(2)))
-        return None
+    # chamadas pelas ferramentas (de dentro da forja)
+    def progresso(self, frac, texto):
+        self._fila.put(("prog", frac, texto))
 
     def status(self, texto):
-        self._fila.put(("status", texto))
+        self._fila.put(("prog", None, texto))
 
-    def tarefa(self, funcao, alvo, mensagem):
+    def cancelado(self):
+        return self._cancelar.is_set()
+
+    def cancelar(self):
+        if self._ocupado:
+            self._cancelar.set()
+            self.l_status.config(text="Apagando o fogo...")
+
+    def tarefa(self, funcao, alvo, mensagem, ferramenta=None, entradas=None):
         if self._ocupado:
             messagebox.showinfo("Aguarde", "A forja ainda está trabalhando no pedido anterior.")
             return
         self._ocupado = True
+        self._cancelar.clear()
+        self._frac = None
+        self._forja_cls = self.atual_cls
+        nome_ferr = getattr(ferramenta, "titulo", "") or getattr(self.atual_cls, "titulo", "")
+        chave = ferramenta.__class__.__name__ if ferramenta is not None else ""
+        entradas = list(entradas or [])
         self.estado("acesa", "Forjando...")
 
         def rodar():
+            reg = {"quando": __import__("time").strftime("%d/%m %H:%M"), "ferramenta": nome_ferr, "chave": chave,
+                   "entradas": entradas, "digitais": [d for d in (self.digital(a) for a in entradas) if d]}
             try:
-                funcao()
-                self._fila.put(("ok", (alvo, mensagem)))
+                res = funcao()
+                saidas = self._achatar(res) or [alvo]
+                reg.update(ok=True, saidas=saidas)
+                self._fila.put(("ok", (alvo, mensagem, saidas, reg)))
+            except motor.Cancelado:
+                reg.update(ok=False, cancelado=True, saidas=[])
+                self._fila.put(("cancelada", reg))
             except Exception as e:
                 traceback.print_exc()
-                self._fila.put(("erro", str(e) or e.__class__.__name__))
+                reg.update(ok=False, saidas=[], erro=str(e))
+                self._fila.put(("erro", (str(e) or e.__class__.__name__, reg)))
         threading.Thread(target=rodar, daemon=True).start()
+
+    @staticmethod
+    def _achatar(res):
+        saida = []
+
+        def ir(x):
+            if isinstance(x, str):
+                if os.path.exists(x):
+                    saida.append(os.path.abspath(x))
+            elif isinstance(x, (list, tuple)):
+                for y in x:
+                    ir(y)
+        ir(res)
+        return saida
+
+    def _registrar(self, reg):
+        h = self.ler_historico()
+        h.append(reg)
+        self.salvar_historico(h)
+        if isinstance(self.atual, Historico):
+            self.atual.preencher()
 
     def _ler_fila(self):
         try:
             while True:
-                tipo, dado = self._fila.get_nowait()
-                if tipo == "status":
-                    self.estado("acesa", "Forjando... " + dado)
+                tipo, *dado = self._fila.get_nowait()
+                if tipo == "prog":
+                    if self._ocupado and not self._cancelar.is_set():
+                        self._frac = dado[0]
+                        self._texto_status = "Forjando... " + dado[1]
+                        self.l_status.config(text=self._texto_status)
                     continue
                 self._ocupado = False
+                self._frac = None
                 if tipo == "ok":
-                    alvo, mensagem = dado
-                    self.estado("pronta", "Forjado! " + mensagem)
-                    oque = "a pasta" if os.path.isdir(alvo) else "o arquivo"
-                    if messagebox.askyesno("Forjado!", f"{mensagem}\n\nQuer abrir {oque} agora?"):
-                        motor.abrir(alvo)
+                    alvo, mensagem, saidas, reg = dado[0]
+                    self._registrar(reg)
+                    if len(saidas) == 1 and os.path.isfile(saidas[0]):
+                        texto = f"Forjado! {os.path.basename(saidas[0])}"
+                        arq = saidas[0]
+                        links = [("abrir arquivo", lambda a=arq: motor.abrir(a)),
+                                 ("abrir pasta", lambda a=arq: motor.abrir(os.path.dirname(a)))]
+                    else:
+                        pasta = alvo if os.path.isdir(alvo) else os.path.dirname(saidas[0] if saidas else alvo)
+                        texto = f"Forjado! {mensagem} em {os.path.basename(pasta) or pasta}"
+                        links = [("abrir pasta", lambda p=pasta: motor.abrir(p))]
+                    self.estado("pronta", texto, links)
+                elif tipo == "cancelada":
+                    self._registrar(dado[0])
+                    self.estado("cancelada")
                 else:
-                    curto = dado.strip().splitlines()[0][:90] if dado.strip() else "erro desconhecido"
-                    self.estado("falha", "A forja falhou · " + curto)
-                    messagebox.showerror("A forja falhou", dado)
+                    msg, reg = dado[0]
+                    self._registrar(reg)
+                    curto = msg.strip().splitlines()[0][:80] if msg.strip() else "erro desconhecido"
+                    self.estado("falha", "A forja falhou · " + curto,
+                                [("ver detalhes", lambda m=msg: messagebox.showerror("A forja falhou", m))])
+                if self.tela == "salao":
+                    self.desenhar_salao()
         except queue.Empty:
             pass
-        self.after(100, self._ler_fila)
+        self._id_fila = self.after(100, self._ler_fila)
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     if len(sys.argv) > 2 and sys.argv[1] == "--autoteste":
         import autoteste
         autoteste.rodar(sys.argv[2], sys.modules[__name__])

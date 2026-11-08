@@ -3,8 +3,10 @@ Motor do Meu PDF: todas as operações com PDF ficam aqui.
 A interface (meupdf.py) só chama estas funções.
 """
 import os
+import re
 import sys
 import glob
+import time
 import shutil
 import subprocess
 import tempfile
@@ -220,13 +222,33 @@ def imagens_para_pdf(imagens, saida, tamanho="Original", margem=0):
 
 
 # ---------------------------------------------------------------- PDF -> Office
-def pdf_para_word(entrada, saida):
+def pdf_para_word(entrada, saida, progresso=None):
+    import logging
     from pdf2docx import Converter
+
+    class Andamento(logging.Handler):
+        fase = 0
+
+        def emit(self, rec):
+            if progresso is None:
+                return
+            msg = rec.getMessage()
+            if "Creating pages" in msg:
+                Andamento.fase = 1
+            m = re.search(r"\((\d+)/(\d+)\) Page", msg)
+            if m:
+                i, n = int(m.group(1)), int(m.group(2))
+                etapa = "lendo" if Andamento.fase == 0 else "montando"
+                progresso((Andamento.fase + i / n) / 2, f"{etapa} página {i} de {n}")
+
+    h = Andamento()
+    logging.getLogger().addHandler(h)
     cv = Converter(entrada)
     try:
         cv.convert(saida)
     finally:
         cv.close()
+        logging.getLogger().removeHandler(h)
     return saida
 
 
@@ -609,78 +631,77 @@ def criar_campo_texto(entrada, saida, pagina, x0, y0, x1, y1, nome):
     return saida
 
 
-# ---------------------------------------------------------------- traduzir
-IDIOMAS = {
-    "Português": "pt", "Inglês": "en", "Espanhol": "es", "Francês": "fr",
-    "Alemão": "de", "Italiano": "it", "Japonês": "ja", "Chinês": "zh-CN",
-}
+# ---------------------------------------------------------------- forja em processo separado
+class Cancelado(Exception):
+    """O usuário cancelou a forja."""
 
 
-def _tradutor_google(destino):
-    from deep_translator import GoogleTranslator
-    tr = GoogleTranslator(source="auto", target=destino)
-
-    def traduz(texto):
-        if len(texto) <= 4500:
-            return tr.translate(texto) or texto
-        partes, atual = [], ""
-        for linha in texto.split("\n"):
-            if len(atual) + len(linha) > 4500:
-                partes.append(atual)
-                atual = ""
-            atual += linha + "\n"
-        partes.append(atual)
-        return "\n".join(tr.translate(x) or x for x in partes if x.strip())
-    return traduz
+def _alvo_processo(nome, args, fila):
+    """Roda dentro do processo filho: executa a função e manda o andamento de volta."""
+    try:
+        func = globals()[nome]
+        kwargs = {}
+        if nome == "pdf_para_word":
+            kwargs["progresso"] = lambda f, t: fila.put(("prog", f, t))
+        res = func(*args, **kwargs)
+        fila.put(("ok", res))
+    except Exception as e:  # noqa: BLE001
+        fila.put(("erro", f"{e.__class__.__name__}: {e}" if not str(e) else str(e)))
 
 
-def traduzir(entrada, saida, destino="pt", progresso=None, tradutor=None):
+def rodar_em_processo(nome, args, progresso=None, cancelado=None, sem_resposta=150):
     """
-    Traduz o texto de cada bloco e escreve a tradução no mesmo lugar,
-    mantendo imagens, desenhos e o layout. Precisa de internet.
+    Roda uma função pesada num processo separado, que pode ser encerrado na hora.
+    Para se o usuário cancelar ou se ficar sem dar sinal de vida por `sem_resposta` segundos.
     """
-    traduz = tradutor or _tradutor_google(destino)
-    with fitz.open(entrada) as doc:
-        n = doc.page_count
-        for i, p in enumerate(doc):
-            blocos = []
-            for b in p.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)["blocks"]:
-                if b.get("type") != 0:
-                    continue
-                linhas, tamanhos, cor, negrito = [], [], 0, False
-                for ln in b["lines"]:
-                    t = "".join(s["text"] for s in ln["spans"])
-                    linhas.append(t)
-                    for s in ln["spans"]:
-                        if s["text"].strip():
-                            tamanhos.append(s["size"])
-                            cor = s["color"]
-                            negrito = negrito or bool(s["flags"] & 16)
-                texto = " ".join(l.strip() for l in linhas).strip()
-                if len(texto) < 2 or not any(ch.isalpha() for ch in texto):
-                    continue
-                blocos.append((fitz.Rect(b["bbox"]), texto,
-                               max(tamanhos) if tamanhos else 11, cor, negrito))
-            if not blocos:
-                continue
-            traducoes = [traduz(t) for _, t, _, _, _ in blocos]
-            for r, *_ in blocos:
-                p.add_redact_annot(r)
+    import multiprocessing as mp
+    ctx = mp.get_context("spawn")
+    fila = ctx.Queue()
+    proc = ctx.Process(target=_alvo_processo, args=(nome, args, fila), daemon=True)
+    proc.start()
+    ultimo = time.time()
+    try:
+        while True:
+            if cancelado and cancelado():
+                raise Cancelado()
             try:
-                p.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE,
-                                   graphics=fitz.PDF_REDACT_LINE_ART_NONE)
-            except (TypeError, AttributeError):
-                p.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
-            for (r, _, tam, cor, negr), trad in zip(blocos, traducoes):
-                css = (f"* {{font-family: sans-serif; font-size: {tam:.1f}px; "
-                       f"color: #{cor:06x}; font-weight: {'bold' if negr else 'normal'}; "
-                       f"line-height: 1.1; margin: 0}}")
-                html = trad.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                p.insert_htmlbox(r + (0, 0, 2, 2), html, css=css)
-            if progresso:
-                progresso(i + 1, n)
-        _salvar(doc, saida)
-    return saida
+                tipo, *dado = fila.get(timeout=0.15)
+            except Exception:
+                if not proc.is_alive():
+                    try:
+                        tipo, *dado = fila.get(timeout=1)
+                    except Exception:
+                        raise RuntimeError("A conversão parou sem avisar o motivo.")
+                elif time.time() - ultimo > sem_resposta:
+                    raise RuntimeError(
+                        f"A conversão ficou {sem_resposta} segundos sem avançar e foi interrompida. "
+                        "Este arquivo pode ter algo que a ferramenta não consegue ler.")
+                else:
+                    continue
+            ultimo = time.time()
+            if tipo == "prog":
+                if progresso:
+                    progresso(*dado)
+            elif tipo == "ok":
+                return dado[0]
+            else:
+                raise RuntimeError(dado[0])
+    finally:
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(3)
+            if proc.is_alive():
+                proc.kill()
+
+
+def impressao_digital(caminho):
+    """Identifica o arquivo pelo conteúdo (vale mesmo se renomear ou mover)."""
+    import hashlib
+    h = hashlib.sha1()
+    with open(caminho, "rb") as f:
+        for bloco in iter(lambda: f.read(1 << 20), b""):
+            h.update(bloco)
+    return h.hexdigest()
 
 
 # ---------------------------------------------------------------- abrir pasta/arquivo

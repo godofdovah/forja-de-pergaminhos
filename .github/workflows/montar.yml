@@ -35,7 +35,7 @@ jobs:
           pyinstaller --noconfirm --windowed --name "Forja de Pergaminhos"
           --icon icone.ico --add-data "icone.ico;." --add-data "icone.png;."
           --add-data "assets;assets" --add-data "versao.txt;."
-          --hidden-import PIL._tkinter_finder --collect-all tkinterdnd2 --collect-all pdf2docx meupdf.py
+          --hidden-import PIL._tkinter_finder --hidden-import autoteste --collect-all tkinterdnd2 --collect-all pdf2docx meupdf.py
 
       - name: Testar se o programa abre
         shell: pwsh
@@ -72,7 +72,7 @@ jobs:
           git config user.email "robo-da-forja@users.noreply.github.com"
           git checkout --orphan resultados
           git rm -rf --cached . | Out-Null
-          git add -f testes_ci/*.png testes_ci/resultados.txt
+          git add -f testes_ci/tela_*.png testes_ci/fluxo_*.png testes_ci/resultados.txt
           git commit -m "Resultados do teste automático"
           git push -f origin resultados
 

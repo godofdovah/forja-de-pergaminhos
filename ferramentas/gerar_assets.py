@@ -16,7 +16,7 @@ def salvar(img, nome):
 
 
 def papel_grande():
-    w, h = 1600, 1000
+    w, h = 1280, 800
     p = np.asarray(pergaminho(w, h, semente=5)).astype(float)
     yy, xx = np.mgrid[0:h, 0:w]
     dx = np.minimum(xx, w - 1 - xx) / (w * 0.5)
@@ -24,7 +24,7 @@ def papel_grande():
     centro = np.clip(np.minimum(dx / 0.045, dy / 0.07), 0, 1) ** 1.3   # 0 na borda, 1 no miolo
     p[..., :3] = p[..., :3] * (1 - centro[..., None]) + PAPEL * centro[..., None]
     salvar(Image.fromarray(np.clip(p, 0, 255).astype(np.uint8), "RGBA"), "papel.png")
-    salvar(rolo(1700, 44, 61), "rolo.png")
+    salvar(rolo(1400, 40, 61), "rolo.png")
 
 
 def cartao(w, h, semente, brilho=False):
@@ -111,9 +111,9 @@ def acao(w=300, h=54, estado="normal"):
     W, H = w * S, h * S
     tom = {"normal": 1.0, "hover": 1.12, "pressed": 0.88}[estado]
     yy, xx = np.mgrid[0:H, 0:W]
-    luz = np.clip(1.3 - np.hypot((xx - W * 0.3) / W, (yy - H * 0.25) / H * 0.6) * 1.1, 0.45, 1.3) * tom
+    luz = np.clip(1.25 - np.abs(yy - H * 0.3) / H * 1.1, 0.5, 1.25) * tom   # só varia de cima para baixo
     base = np.array([160, 36, 30])
-    rgb = base * luz[..., None] + (ruido(H, W, 40, 3, 0.5, 9)[..., None] - 0.5) * 14
+    rgb = base * luz[..., None] + (ruido(H, W, 40, 3, 0.5, 9)[..., None] - 0.5) * 10
     arr = np.zeros((H, W, 4))
     arr[..., :3] = np.clip(rgb, 0, 255)
     mask = Image.new("L", (W, H), 0)
