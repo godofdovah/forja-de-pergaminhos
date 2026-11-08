@@ -1,23 +1,22 @@
 FORJA DE PERGAMINHOS
 
-Programa de PDF parecido com o iLovePDF, só que roda no seu computador. Seus arquivos não vão para a internet e não tem limite de uso.
+Programa de PDF com cara de RPG que roda só no seu computador. Seus arquivos não vão para a internet e não tem limite de uso.
 
-COMO INSTALAR
+ONDE BAIXAR
 
-Dê dois cliques em "Instalar Forja de Pergaminhos.bat" e espere uns cinco minutos. Ele monta o programa, instala e cria os ícones na Área de Trabalho e no Menu Iniciar. No final o programa abre sozinho. Depois disso você pode apagar esta pasta, porque o programa fica instalado em outro lugar.
+Na página de downloads do projeto no GitHub (Releases) ficam dois arquivos:
 
-Se o computador ainda não tiver o Python, o instalador baixa ele primeiro e pede para você rodar o instalador de novo. O Python só é usado para montar o programa, você não precisa mexer nele.
+Instalar-Forja-de-Pergaminhos.exe é a versão completa, para instalar do zero.
+Atualizar-Forja-de-Pergaminhos.exe traz só o que mudou e serve para quem já tem a Forja instalada.
 
-Para desinstalar, apague os ícones e a pasta "Forja de Pergaminhos" que fica em %LOCALAPPDATA%\Programs (cole esse caminho na barra de endereço do Explorador de Arquivos).
-
-O QUE TEM
-
-Juntar, dividir e organizar páginas; converter PDF para Word, Excel, PowerPoint e JPG e o contrário; editar (texto e imagens), marca d'água, PDF/A, ocultar informações, recortar, preencher formulários e traduzir. Os arquivos novos são salvos com outro nome, então o original nunca é alterado.
+Na primeira vez o Windows pode mostrar "O Windows protegeu o computador". Clique em "Mais informações" e depois em "Executar assim mesmo".
 
 PROGRAMAS EXTRAS (só para algumas ferramentas)
 
-Word, Excel e PowerPoint para PDF usam o Microsoft Office do computador. Se não tiver Office, instale o LibreOffice, que é gratuito (libreoffice.org).
+Word, Excel e PowerPoint para PDF usam o Microsoft Office do computador. Sem Office, instale o LibreOffice (gratuito, libreoffice.org).
+PDF para PDF/A precisa do Ghostscript (gratuito, ghostscript.com/releases).
+Traduzir PDF usa internet, porque manda o texto para o Google Tradutor.
 
-PDF para PDF/A precisa do Ghostscript, também gratuito (ghostscript.com/releases, versão para Windows 64 bits).
+LETRAS
 
-Traduzir PDF é a única ferramenta que usa internet, porque manda o texto para o Google Tradutor. Não use com documentos sigilosos.
+As letras Almendra e Cormorant Garamond (renomeada aqui como "Forja Texto") são distribuídas sob a SIL Open Font License; as licenças estão em assets/fontes.

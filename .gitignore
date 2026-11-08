@@ -2,5 +2,8 @@ __pycache__/
 build/
 dist/
 saida/
+anterior/
 *.spec
 erro.txt
+versao.txt
+atualizacao_arquivos.iss

@@ -2,7 +2,9 @@
 Forja de Pergaminhos — ferramentas de PDF que rodam só no seu computador.
 """
 import os
+import re
 import sys
+import json
 import queue
 import tempfile
 import threading
@@ -12,10 +14,11 @@ from tkinter import ttk, filedialog, messagebox, simpledialog, colorchooser
 
 PASTA = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PASTA)
+ASSETS = os.path.join(PASTA, "assets")
 
 
 def mostrar_erro_fatal(titulo):
-    """Com pythonw não aparece janela preta, então o erro vira um aviso na tela e um arquivo erro.txt."""
+    """Com o programa sem janela preta, o erro vira um aviso na tela e um arquivo erro.txt."""
     detalhe = traceback.format_exc()
     try:
         with open(os.path.join(PASTA, "erro.txt"), "w", encoding="utf-8") as f:
@@ -24,30 +27,76 @@ def mostrar_erro_fatal(titulo):
         pass
     r = tk.Tk()
     r.withdraw()
-    messagebox.showerror("Forja de Pergaminhos", f"{titulo}\n\n{detalhe[-1500:]}\n\n(Isso também foi salvo em erro.txt na pasta do programa.)")
+    messagebox.showerror("Forja de Pergaminhos", f"{titulo}\n\n{detalhe[-1500:]}")
     r.destroy()
     sys.exit(1)
 
 
 try:
     import motor  # noqa: E402
+    from PIL import Image, ImageTk  # noqa: E402
 except Exception:
-    mostrar_erro_fatal("Faltam bibliotecas. Rode o '1 - Instalar.bat' de novo.")
+    mostrar_erro_fatal("Faltam partes do programa. Reinstale a Forja de Pergaminhos.")
 
 try:
     from tkinterdnd2 import TkinterDnD, DND_FILES
 except Exception:
     TkinterDnD = None
     DND_FILES = None
-BaseTk = tk.Tk
 TEM_DND = False
 
-FONTE = "Segoe UI" if motor.EH_WINDOWS else "DejaVu Sans"
-FUNDO = "#f4f5f9"
-BRANCO = "#ffffff"
-TEXTO = "#33333b"
-CINZA = "#77778a"
-DESTAQUE = "#e5322d"
+
+def carregar_fontes():
+    """Registra as letras do programa só para ele mesmo (não instala nada no Windows)."""
+    pasta = os.path.join(ASSETS, "fontes")
+    if not os.path.isdir(pasta):
+        return
+    for arq in os.listdir(pasta):
+        if not arq.lower().endswith(".ttf"):
+            continue
+        caminho = os.path.join(pasta, arq)
+        if motor.EH_WINDOWS:
+            try:
+                import ctypes
+                ctypes.windll.gdi32.AddFontResourceExW(caminho, 0x10, 0)  # FR_PRIVATE
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------- aparência
+TIT = "Almendra"          # letra dos títulos
+TXT = "Forja Texto"       # letra dos textos (Cormorant Garamond)
+
+PAPEL = "#f1e4c4"         # cor lisa do centro do pergaminho
+PAPEL_ESC = "#e4d1a7"
+CAMPO = "#fbf4e2"         # fundo de listas e caixas de texto
+TINTA = "#3e220a"
+TINTA2 = "#5a4022"
+TINTA3 = "#7d6646"
+LACRE = "#8e1d1a"
+
+# nomes antigos usados pelas ferramentas
+FUNDO = PAPEL
+BRANCO = CAMPO
+TEXTO = TINTA
+CINZA = TINTA3
+DESTAQUE = LACRE
+
+TEMAS = {
+    "escuro": dict(barra="#121115", titulo="#d9b56a", sub="#a8987a", borda="#5a4a2e", fundo="#1d1c21",
+                   rotulo="Modo escuro"),
+    "claro": dict(barra="#dccaa5", titulo="#6b3f16", sub="#6e5638", borda="#a9875a", fundo="#e8dabb",
+                  rotulo="Modo claro"),
+}
+
+
+def F(px, *estilo):
+    return (TXT, -px, *estilo)
+
+
+def T(px, *estilo):
+    return (TIT, -px, "bold", *estilo)
+
 
 T_PDF = [("PDF", "*.pdf")]
 T_IMG = [("Imagens", "*.jpg *.jpeg *.png *.bmp *.tif *.tiff *.webp")]
@@ -63,6 +112,38 @@ def extensoes(tipos):
         exts += [p.replace("*", "").lower() for p in padrao.split()]
     return tuple(exts)
 
+
+_cache_img = {}
+
+
+def img(nome):
+    """Imagem dos assets como PhotoImage (fica guardada para não sumir da tela)."""
+    if nome not in _cache_img:
+        _cache_img[nome] = ImageTk.PhotoImage(Image.open(os.path.join(ASSETS, nome)))
+    return _cache_img[nome]
+
+
+_pil = {}
+
+
+def pil(nome):
+    if nome not in _pil:
+        _pil[nome] = Image.open(os.path.join(ASSETS, nome)).convert("RGBA")
+    return _pil[nome]
+
+
+def compor_folha(w, h, rapido=False):
+    """Pergaminho aberto (papel + dois rolos) no tamanho pedido."""
+    w, h = max(80, int(w)), max(60, int(h))
+    filtro = Image.BILINEAR if rapido else Image.LANCZOS
+    rh = max(18, min(40, int(h * 0.06)))
+    folha = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    papel = pil("papel.png").resize((max(10, w - 36), max(10, h - rh)), filtro)
+    folha.alpha_composite(papel, (18, rh // 2))
+    rolo = pil("rolo.png").resize((w, rh), filtro)
+    folha.alpha_composite(rolo, (0, 0))
+    folha.alpha_composite(rolo, (0, h - rh))
+    return folha
 
 # =====================================================================
 # Componentes reaproveitados
@@ -118,12 +199,12 @@ class ListaArquivos(tk.Frame):
         self.exts = extensoes(tipos)
         self.arquivos = []
         dica = " (pode arrastar os arquivos aqui)" if TEM_DND else ""
-        tk.Label(self, text=titulo + dica, bg=FUNDO, fg=CINZA, font=(FONTE, 9)).pack(anchor="w")
+        tk.Label(self, text=titulo + dica, bg=FUNDO, fg=CINZA, font=F(15)).pack(anchor="w")
         meio = tk.Frame(self, bg=FUNDO)
         meio.pack(fill="both", expand=True)
-        self.lista = tk.Listbox(meio, height=altura, font=(FONTE, 10), activestyle="none",
-                                selectbackground="#fde3e2", selectforeground=TEXTO,
-                                relief="flat", highlightthickness=1, highlightcolor="#ddd")
+        self.lista = tk.Listbox(meio, height=altura, font=F(17), activestyle="none",
+                                selectbackground="#e2c88f", selectforeground=TEXTO,
+                                relief="flat", highlightthickness=1, highlightcolor="#a9875a", highlightbackground="#a9875a", bg=CAMPO, fg=TEXTO)
         self.lista.pack(side="left", fill="both", expand=True)
         bts = tk.Frame(meio, bg=FUNDO)
         bts.pack(side="left", fill="y", padx=(6, 0))
@@ -173,7 +254,7 @@ class ArquivoUnico(tk.Frame):
         self.ao_escolher = ao_escolher
         ttk.Button(self, text=rotulo, command=self.escolher, style="Acao.TButton").pack(side="left")
         self.nome = tk.Label(self, text="nenhum arquivo" + (" — ou arraste aqui" if TEM_DND else ""),
-                             bg=FUNDO, fg=CINZA, font=(FONTE, 10))
+                             bg=FUNDO, fg=CINZA, font=F(17))
         self.nome.pack(side="left", padx=10)
         ativar_soltar(self, lambda a: self.definir(a[0]), extensoes(tipos))
         ativar_soltar(self.nome, lambda a: self.definir(a[0]), extensoes(tipos))
@@ -194,7 +275,7 @@ class Visualizador(tk.Frame):
     """Mostra uma página do PDF e captura cliques ou retângulos arrastados."""
 
     def __init__(self, pai, modo=None, ao_clicar=None, ao_retangulo=None):
-        super().__init__(pai, bg="#e3e4ea")
+        super().__init__(pai, bg=PAPEL_ESC)
         self.modo = modo
         self.ao_clicar = ao_clicar
         self.ao_retangulo = ao_retangulo
@@ -207,18 +288,18 @@ class Visualizador(tk.Frame):
         self._temp = None
         self._agendado = None
 
-        barra = tk.Frame(self, bg="#e3e4ea")
+        barra = tk.Frame(self, bg=PAPEL_ESC)
         barra.pack(fill="x", pady=4)
         ttk.Button(barra, text="◀", width=3, command=lambda: self.ir(-1)).pack(side="left", padx=4)
-        self.rotulo = tk.Label(barra, text="", bg="#e3e4ea", font=(FONTE, 10))
+        self.rotulo = tk.Label(barra, text="", bg=PAPEL_ESC, font=F(17))
         self.rotulo.pack(side="left")
         ttk.Button(barra, text="▶", width=3, command=lambda: self.ir(1)).pack(side="left", padx=4)
-        self.dica = tk.Label(barra, text="", bg="#e3e4ea", fg=CINZA, font=(FONTE, 9))
+        self.dica = tk.Label(barra, text="", bg=PAPEL_ESC, fg=CINZA, font=F(15))
         self.dica.pack(side="right", padx=6)
 
         area = tk.Frame(self)
         area.pack(fill="both", expand=True)
-        self.canvas = tk.Canvas(area, bg="#cfd1d9", highlightthickness=0, cursor="crosshair")
+        self.canvas = tk.Canvas(area, bg="#c9b28a", highlightthickness=0, cursor="crosshair")
         rol = ttk.Scrollbar(area, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=rol.set)
         self.canvas.pack(side="left", fill="both", expand=True)
@@ -253,7 +334,7 @@ class Visualizador(tk.Frame):
         self.canvas.delete("all")
         if not self.doc:
             self.canvas.create_text(20, 20, anchor="nw", text="Escolha um PDF para ver aqui.",
-                                    font=(FONTE, 11), fill=CINZA)
+                                    font=F(18), fill=CINZA)
             return
         p = self.doc[self.pagina]
         larg = max(200, self.canvas.winfo_width() - 30)
@@ -275,7 +356,7 @@ class Visualizador(tk.Frame):
                                              dash=m.get("dash"))
                 if m.get("texto"):
                     self.canvas.create_text(17 + x0 * z, 17 + y0 * z, anchor="nw", text=m["texto"],
-                                            fill=m.get("cor", DESTAQUE), font=(FONTE, 9, "bold"))
+                                            fill=m.get("cor", DESTAQUE), font=T(15))
             else:
                 x, y = m["coords"]
                 tam = max(6, int(m.get("tamanho", 12) * z * 0.75))
@@ -322,19 +403,41 @@ class Visualizador(tk.Frame):
             self.ao_retangulo(self.pagina, *r)
 
 
+
+
 # =====================================================================
-# Base das ferramentas
+# Base das ferramentas (tudo isto fica em cima do pergaminho aberto)
 # =====================================================================
+class Ornamento(tk.Canvas):
+    def __init__(self, pai, largura=600):
+        super().__init__(pai, height=14, bg=PAPEL, highlightthickness=0, width=largura)
+        self.bind("<Configure>", self._desenhar)
+
+    def _desenhar(self, e=None):
+        self.delete("all")
+        w = self.winfo_width()
+        m = w // 2
+        for i in range(0, m - 14, 6):
+            tom = int(200 - 90 * (i / max(1, m)))
+            cor = f"#{tom:02x}{int(tom * 0.78):02x}{int(tom * 0.5):02x}"
+            self.create_line(m - 14 - i - 6, 7, m - 14 - i, 7, fill=cor, width=2)
+            self.create_line(m + 14 + i, 7, m + 14 + i + 6, 7, fill=cor, width=2)
+        self.create_polygon(m, 1, m + 6, 7, m, 13, m - 6, 7, fill="#8a6430")
+
+
 class Ferramenta(tk.Frame):
     titulo = ""
     descricao = ""
+    resumo = ""
 
-    def __init__(self, app):
-        super().__init__(app.conteudo, bg=FUNDO)
+    def __init__(self, app, pai=None, embutido=False):
+        super().__init__(pai or app.area, bg=FUNDO)
         self.app = app
-        tk.Label(self, text=self.titulo, bg=FUNDO, fg=TEXTO, font=(FONTE, 18, "bold")).pack(anchor="w")
-        tk.Label(self, text=self.descricao, bg=FUNDO, fg=CINZA, font=(FONTE, 10),
-                 wraplength=900, justify="left").pack(anchor="w", pady=(0, 12))
+        if not embutido:
+            tk.Label(self, text=self.titulo, bg=FUNDO, fg=TINTA, font=T(34)).pack(anchor="w")
+            tk.Label(self, text=self.descricao, bg=FUNDO, fg=TINTA2, font=F(19, "italic"),
+                     wraplength=1000, justify="left").pack(anchor="w")
+            Ornamento(self).pack(fill="x", pady=(6, 12))
         self.corpo = tk.Frame(self, bg=FUNDO)
         self.corpo.pack(fill="both", expand=True)
         self.montar()
@@ -343,7 +446,7 @@ class Ferramenta(tk.Frame):
         pass
 
     def secao(self, pai, texto):
-        tk.Label(pai, text=texto, bg=FUNDO, fg=TEXTO, font=(FONTE, 10, "bold"), wraplength=310,
+        tk.Label(pai, text=texto, bg=FUNDO, fg=TINTA, font=T(18), wraplength=340,
                  justify="left").pack(anchor="w", pady=(10, 2))
 
     def botao_principal(self, pai, texto, comando):
@@ -358,17 +461,17 @@ class Ferramenta(tk.Frame):
 
     def precisa(self, cond, msg):
         if not cond:
-            messagebox.showwarning("Falta algo", msg)
+            messagebox.showwarning("Falta material", msg)
         return cond
 
 
 class ComVisualizador(Ferramenta):
-    """Layout com opções à esquerda e o documento à direita."""
+    """Opções à esquerda e o documento à direita."""
     modo = "retangulo"
 
     def montar(self):
-        esq = tk.Frame(self.corpo, bg=FUNDO, width=330)
-        esq.pack(side="left", fill="y", padx=(0, 14))
+        esq = tk.Frame(self.corpo, bg=FUNDO, width=360)
+        esq.pack(side="left", fill="y", padx=(0, 16))
         esq.pack_propagate(False)
         self.arquivo = ArquivoUnico(esq, self._abriu)
         self.arquivo.pack(anchor="w")
@@ -396,6 +499,50 @@ class ComVisualizador(Ferramenta):
         pass
 
 
+class Par(Ferramenta):
+    """Um pergaminho com dois sentidos de conversão (ex.: PDF → Word e Word → PDF)."""
+    lados = []      # [(rótulo, explicação, classe), ...]
+    selo = "azul"
+    sigla = "W"
+
+    def montar(self):
+        topo = tk.Frame(self.corpo, bg=FUNDO)
+        topo.pack(anchor="w", pady=(0, 12))
+        self.caixas = []
+        for i, (rot, dica, _) in enumerate(self.lados):
+            c = tk.Frame(topo, bg=FUNDO, highlightthickness=2, cursor="hand2", padx=10, pady=6)
+            c.pack(side="left", padx=(0, 16))
+            s = tk.Label(c, image=img(f"selo_{self.selo}_p.png"), text=self.sigla, compound="center",
+                         fg="#fbead0", font=T(15), bg=FUNDO)
+            s.pack(side="left", padx=(0, 10))
+            txt = tk.Frame(c, bg=FUNDO)
+            txt.pack(side="left")
+            a = tk.Label(txt, text=rot, font=T(21), bg=FUNDO)
+            a.pack(anchor="w")
+            b = tk.Label(txt, text=dica, font=F(16, "italic"), bg=FUNDO)
+            b.pack(anchor="w")
+            for w in (c, s, txt, a, b):
+                w.bind("<Button-1>", lambda e, k=i: self.escolher(k))
+            self.caixas.append((c, s, txt, a, b))
+        self.miolo = tk.Frame(self.corpo, bg=FUNDO)
+        self.miolo.pack(fill="both", expand=True)
+        self.sub = None
+        self.escolher(0)
+
+    def escolher(self, k):
+        for i, (c, s, txt, a, b) in enumerate(self.caixas):
+            ativo = i == k
+            fundo = "#e6cf9c" if ativo else FUNDO
+            for w in (c, s, txt, a, b):
+                w.config(bg=fundo)
+            c.config(highlightbackground=LACRE if ativo else "#c4a878", highlightcolor=LACRE if ativo else "#c4a878")
+            a.config(fg=TINTA if ativo else TINTA3)
+            b.config(fg=TINTA2 if ativo else "#9c8463")
+        if self.sub is not None:
+            self.sub.destroy()
+        self.sub = self.lados[k][2](self.app, self.miolo, embutido=True)
+        self.sub.pack(fill="both", expand=True)
+
 # =====================================================================
 # Ferramentas
 # =====================================================================
@@ -406,7 +553,7 @@ class Juntar(Ferramenta):
     def montar(self):
         self.lista = ListaArquivos(self.corpo, T_PDF + T_IMG, "PDFs e imagens, na ordem final", 16)
         self.lista.pack(fill="both", expand=True)
-        self.botao_principal(self.corpo, "Juntar PDFs", self.rodar)
+        self.botao_principal(self.corpo, "Forjar PDF", self.rodar)
 
     def rodar(self):
         arqs = self.lista.arquivos
@@ -424,7 +571,7 @@ class Dividir(Ferramenta):
     def montar(self):
         self.arq = ArquivoUnico(self.corpo, self.abriu)
         self.arq.pack(anchor="w")
-        self.info = tk.Label(self.corpo, text="", bg=FUNDO, fg=CINZA, font=(FONTE, 10))
+        self.info = tk.Label(self.corpo, text="", bg=FUNDO, fg=CINZA, font=F(17))
         self.info.pack(anchor="w", pady=4)
         self.secao(self.corpo, "Como dividir")
         self.modo = tk.StringVar(value="intervalos")
@@ -433,11 +580,11 @@ class Dividir(Ferramenta):
                      ("todas", "Uma página por arquivo (todas)")):
             ttk.Radiobutton(self.corpo, text=t, value=v, variable=self.modo).pack(anchor="w")
         self.secao(self.corpo, "Páginas")
-        self.paginas = ttk.Entry(self.corpo, width=40, font=(FONTE, 11))
+        self.paginas = ttk.Entry(self.corpo, width=40, font=F(18))
         self.paginas.pack(anchor="w")
         tk.Label(self.corpo, text="Exemplos:  1-3, 5, 8-10     ou   4-   (da 4 até o fim)",
-                 bg=FUNDO, fg=CINZA, font=(FONTE, 9)).pack(anchor="w")
-        self.botao_principal(self.corpo, "Dividir PDF", self.rodar)
+                 bg=FUNDO, fg=CINZA, font=F(15)).pack(anchor="w")
+        self.botao_principal(self.corpo, "Forjar divisão", self.rodar)
 
     def abriu(self, c):
         self.info.config(text=f"Este PDF tem {motor.contar_paginas(c)} páginas.")
@@ -505,7 +652,7 @@ class Organizar(Ferramenta):
             f.grid(row=pos // colunas, column=pos % colunas, padx=6, pady=6)
             img = tk.Label(f, image=self.miniatura(idx, rot), bg=BRANCO)
             img.pack()
-            lbl = tk.Label(f, text=f"pág. {idx + 1}", bg=f["bg"], fg=BRANCO if sel else CINZA, font=(FONTE, 9))
+            lbl = tk.Label(f, text=f"pág. {idx + 1}", bg=f["bg"], fg=BRANCO if sel else CINZA, font=F(15))
             lbl.pack()
             for w in (f, img, lbl):
                 w.bind("<Button-1>", lambda e, p=pos: self.clicar(p, e))
@@ -568,6 +715,7 @@ class Conversor(Ferramenta):
     ext_saida = ".pdf"
     sufixo = "convertido"
     aviso = ""
+    acao_txt = "Forjar"
 
     def converter(self, entrada, saida):
         raise NotImplementedError
@@ -577,9 +725,9 @@ class Conversor(Ferramenta):
         self.lista.pack(fill="both", expand=True)
         self.extras(self.corpo)
         if self.aviso:
-            tk.Label(self.corpo, text=self.aviso, bg=FUNDO, fg=CINZA, font=(FONTE, 9),
+            tk.Label(self.corpo, text=self.aviso, bg=FUNDO, fg=CINZA, font=F(15),
                      wraplength=850, justify="left").pack(anchor="w", pady=(8, 0))
-        self.botao_principal(self.corpo, "Converter", self.rodar)
+        self.botao_principal(self.corpo, self.acao_txt, self.rodar)
 
     def extras(self, pai):
         pass
@@ -600,6 +748,7 @@ class Conversor(Ferramenta):
 
 
 class PdfWord(Conversor):
+    acao_txt = "Forjar documento do Word"
     titulo = "PDF para Word"
     descricao = "Transforma o PDF num documento do Word (.docx) para você editar."
     ext_saida = ".docx"
@@ -610,6 +759,7 @@ class PdfWord(Conversor):
 
 
 class PdfPpt(Conversor):
+    acao_txt = "Forjar apresentação"
     titulo = "PDF para PowerPoint"
     descricao = "Cada página do PDF vira um slide (.pptx)."
     ext_saida = ".pptx"
@@ -620,6 +770,7 @@ class PdfPpt(Conversor):
 
 
 class PdfExcel(Conversor):
+    acao_txt = "Forjar planilha"
     titulo = "PDF para Excel"
     descricao = "Puxa as tabelas do PDF para uma planilha (.xlsx). Cada tabela vira uma aba."
     ext_saida = ".xlsx"
@@ -638,24 +789,28 @@ class OfficePdf(Conversor):
 
 
 class WordPdf(OfficePdf):
+    acao_txt = "Forjar PDF"
     titulo = "Word para PDF"
     descricao = "Converte documentos do Word (.doc, .docx) em PDF."
     tipos = T_WORD
 
 
 class PptPdf(OfficePdf):
+    acao_txt = "Forjar PDF"
     titulo = "PowerPoint para PDF"
     descricao = "Converte apresentações (.ppt, .pptx) em PDF."
     tipos = T_PPT
 
 
 class ExcelPdf(OfficePdf):
+    acao_txt = "Forjar PDF"
     titulo = "Excel para PDF"
     descricao = "Converte planilhas (.xls, .xlsx) em PDF."
     tipos = T_EXCEL
 
 
 class PdfPdfa(Conversor):
+    acao_txt = "Forjar PDF/A"
     titulo = "PDF para PDF/A"
     resumo = "Formato de arquivamento pedido pelo SEI, editais e tribunais."
     descricao = "Gera a versão PDF/A, o formato de arquivamento que muitos sistemas (SEI, tribunais, editais) pedem."
@@ -675,6 +830,7 @@ class PdfPdfa(Conversor):
 
 
 class PdfJpg(Conversor):
+    acao_txt = "Forjar imagens"
     titulo = "PDF para JPG"
     descricao = "Transforma cada página em imagem, ou tira só as fotos que estão dentro do PDF."
     sufixo = "imagens"
@@ -722,7 +878,7 @@ class JpgPdf(Ferramenta):
         self.marg = ttk.Combobox(f, values=["Sem margem", "Pequena", "Grande"], width=12, state="readonly")
         self.marg.set("Pequena")
         self.marg.pack(side="left", padx=4)
-        self.botao_principal(self.corpo, "Criar PDF", self.rodar)
+        self.botao_principal(self.corpo, "Forjar PDF", self.rodar)
 
     def rodar(self):
         arqs = list(self.lista.arquivos)
@@ -750,7 +906,7 @@ class Editar(ComVisualizador):
         ttk.Radiobutton(pai, text="Imagem (arraste um retângulo)", value="imagem", variable=self.tipo,
                         command=self.trocou).pack(anchor="w")
         self.secao(pai, "Texto")
-        self.texto = ttk.Entry(pai, width=36, font=(FONTE, 11))
+        self.texto = ttk.Entry(pai, width=36, font=F(18))
         self.texto.pack(anchor="w")
         f = tk.Frame(pai, bg=FUNDO)
         f.pack(anchor="w", pady=6)
@@ -762,7 +918,7 @@ class Editar(ComVisualizador):
         self.bcor = tk.Button(f, text="  Cor  ", bg=self.cor, fg="white", relief="flat", command=self.escolher_cor)
         self.bcor.pack(side="left")
         self.secao(pai, "Alterações")
-        self.lista = tk.Listbox(pai, height=8, font=(FONTE, 9), relief="flat")
+        self.lista = tk.Listbox(pai, height=8, font=F(15), relief="flat")
         self.lista.pack(fill="x")
         ttk.Button(pai, text="Desfazer última", command=self.desfazer).pack(anchor="w", pady=4)
         self.itens = []
@@ -845,7 +1001,7 @@ class MarcaDagua(ComVisualizador):
         ttk.Radiobutton(f, text="Texto", value="texto", variable=self.tipo).pack(side="left")
         ttk.Radiobutton(f, text="Imagem", value="imagem", variable=self.tipo).pack(side="left", padx=10)
         self.secao(pai, "Texto")
-        self.texto = ttk.Entry(pai, width=34, font=(FONTE, 11))
+        self.texto = ttk.Entry(pai, width=34, font=F(18))
         self.texto.insert(0, "CONFIDENCIAL")
         self.texto.pack(anchor="w")
         g = tk.Frame(pai, bg=FUNDO)
@@ -922,11 +1078,11 @@ class Ocultar(ComVisualizador):
 
     def opcoes(self, pai):
         tk.Label(pai, text="O que fica embaixo da tarja é apagado de verdade, não dá para copiar nem recuperar.",
-                 bg=FUNDO, fg=DESTAQUE, font=(FONTE, 9), wraplength=310, justify="left").pack(anchor="w", pady=8)
+                 bg=FUNDO, fg=DESTAQUE, font=F(15), wraplength=310, justify="left").pack(anchor="w", pady=8)
         self.secao(pai, "Palavras para esconder")
         tk.Label(pai, text="separe por vírgula, ex.: CPF, 123.456.789-00", bg=FUNDO, fg=CINZA,
-                 font=(FONTE, 9)).pack(anchor="w")
-        self.termos = tk.Text(pai, height=4, width=36, font=(FONTE, 10), relief="flat")
+                 font=F(15)).pack(anchor="w")
+        self.termos = tk.Text(pai, height=4, width=36, font=F(17), relief="flat")
         self.termos.pack(anchor="w")
         self.secao(pai, "Áreas marcadas")
         self.qtd = tk.Label(pai, text="0 áreas", bg=FUNDO, fg=CINZA)
@@ -1025,7 +1181,7 @@ class Formularios(ComVisualizador):
                      bg=FUNDO, fg=CINZA, justify="left").pack(anchor="w")
         for k in campos:
             tk.Label(self.area.dentro, text=f"{k['rotulo']}  (pág. {k['pagina'] + 1})", bg=FUNDO,
-                     font=(FONTE, 9)).pack(anchor="w", pady=(6, 0))
+                     font=F(15)).pack(anchor="w", pady=(6, 0))
             if k["tipo"] == "texto":
                 v = tk.StringVar(value=k["valor"] or "")
                 ttk.Entry(self.area.dentro, textvariable=v, width=34).pack(anchor="w")
@@ -1087,8 +1243,8 @@ class Traduzir(Ferramenta):
         self.idioma.pack(side="left", padx=6)
         tk.Label(self.corpo, text="Esta é a única ferramenta que precisa de internet: o texto é enviado "
                                   "ao Google Tradutor. Não use com documentos sigilosos.",
-                 bg=FUNDO, fg=CINZA, font=(FONTE, 9), wraplength=700, justify="left").pack(anchor="w")
-        self.botao_principal(self.corpo, "Traduzir", self.rodar)
+                 bg=FUNDO, fg=CINZA, font=F(15), wraplength=700, justify="left").pack(anchor="w")
+        self.botao_principal(self.corpo, "Forjar tradução", self.rodar)
 
     def rodar(self):
         c = self.arq.caminho
@@ -1101,134 +1257,460 @@ class Traduzir(Ferramenta):
             self.app.tarefa(lambda: motor.traduzir(c, s, cod, prog), s, "PDF traduzido!")
 
 
-# ---------------------------------------------------------------- catálogo
+
+
+# ---------------------------------------------------------------- conversores em par
+class WordPar(Par):
+    titulo = "Word ⇄ PDF"
+    descricao = "Escolha para qual lado quer converter. Dá para colocar vários arquivos de uma vez."
+    resumo = "De PDF para Word ou de Word para PDF."
+    selo = "azul"
+    lados = [("PDF → Word", "transforma o PDF num documento editável", PdfWord),
+             ("Word → PDF", "transforma o documento do Word em PDF", WordPdf)]
+
+
+class ExcelPar(Par):
+    sigla = "X"
+    titulo = "Excel ⇄ PDF"
+    descricao = "Escolha para qual lado quer converter. Dá para colocar vários arquivos de uma vez."
+    resumo = "De PDF para Excel ou de Excel para PDF."
+    selo = "verde"
+    lados = [("PDF → Excel", "puxa as tabelas do PDF para a planilha", PdfExcel),
+             ("Excel → PDF", "transforma a planilha em PDF", ExcelPdf)]
+
+
+class PptPar(Par):
+    sigla = "P"
+    titulo = "PowerPoint ⇄ PDF"
+    descricao = "Escolha para qual lado quer converter. Dá para colocar vários arquivos de uma vez."
+    resumo = "De PDF para slides ou de slides para PDF."
+    selo = "laranja"
+    lados = [("PDF → PowerPoint", "cada página vira um slide", PdfPpt),
+             ("PowerPoint → PDF", "transforma a apresentação em PDF", PptPdf)]
+
+
+class JpgPar(Par):
+    sigla = "▣"
+    titulo = "JPG ⇄ PDF"
+    descricao = "Escolha para qual lado quer converter."
+    resumo = "De PDF para imagens ou de imagens para PDF."
+    selo = "ouro"
+    lados = [("PDF → JPG", "cada página vira uma imagem", PdfJpg),
+             ("JPG → PDF", "junta fotos e imagens num PDF", JpgPdf)]
+
+
+Juntar.resumo = "Une vários pergaminhos num só."
+Dividir.resumo = "Separa páginas ou intervalos."
+Organizar.resumo = "Muda a ordem, gira, exclui páginas."
+Editar.resumo = "Escreve texto ou cola imagens."
+MarcaDagua.resumo = "Texto ou brasão em todas as páginas."
+PdfPdfa.resumo = "Formato de arquivamento do SEI e editais."
+Ocultar.resumo = "Apaga de vez o que é sigiloso."
+Recortar.resumo = "Corta as margens da página."
+Formularios.resumo = "Preenche ou cria campos."
+Traduzir.resumo = "Traduz mantendo o layout."
+PdfPdfa.descricao = ("Gera a versão PDF/A, o formato de arquivamento que muitos sistemas "
+                     "(SEI, tribunais, editais) pedem.")
+
 FERRAMENTAS = [
-    (Juntar, "⊕", "#e5322d"), (Dividir, "÷", "#e5322d"), (Organizar, "▦", "#e5322d"),
-    (PdfWord, "W", "#2b5797"), (PdfPpt, "P", "#d24726"), (PdfExcel, "X", "#1e7145"),
-    (WordPdf, "W", "#2b5797"), (PptPdf, "P", "#d24726"), (ExcelPdf, "X", "#1e7145"),
-    (Editar, "✎", "#8e44ad"), (PdfJpg, "▣", "#d4a017"), (JpgPdf, "▣", "#d4a017"),
-    (MarcaDagua, "≋", "#8e44ad"), (PdfPdfa, "A", "#2b5797"), (Ocultar, "▬", "#33333b"),
-    (Recortar, "⌗", "#8e44ad"), (Formularios, "☰", "#8e44ad"), (Traduzir, "文", "#5b4ce5"),
+    (Juntar, "⊕", "vermelho"), (Dividir, "÷", "vermelho"), (Organizar, "❖", "vermelho"),
+    (Editar, "✒", "roxo"), (WordPar, "W", "azul"), (ExcelPar, "X", "verde"),
+    (PptPar, "P", "laranja"), (JpgPar, "▣", "ouro"), (MarcaDagua, "≋", "roxo"),
+    (PdfPdfa, "A", "azul"), (Ocultar, "▬", "preto"), (Recortar, "✂", "roxo"),
+    (Formularios, "☰", "roxo"), (Traduzir, "文", "azul"),
 ]
+
+ESTADOS = {
+    "fria": ("#6d6a70", None, "A forja está fria · esperando materiais para forjar"),
+    "acesa": ("#e0661c", "#ffb060", "Forjando..."),
+    "pronta": ("#d9a93a", "#ffe08a", "Forjado!"),
+    "falha": ("#b3261e", "#ff7a6a", "A forja falhou"),
+}
+
+CW, CH = 344, 190       # tamanho das imagens dos pergaminhos do salão
 
 
 # =====================================================================
 # Janela principal
 # =====================================================================
-class App(BaseTk):
+class App(tk.Tk):
     def __init__(self):
+        carregar_fontes()
         super().__init__()
-        global TEM_DND
+        global TEM_DND, TIT, TXT
         if TkinterDnD is not None:
             try:
                 TkinterDnD._require(self)
                 TEM_DND = True
             except Exception:
                 TEM_DND = False
-        self.title("Forja de Pergaminhos")
-        self.geometry("1180x780")
-        self.minsize(900, 600)
-        self.configure(bg=FUNDO)
-        pasta = os.path.dirname(os.path.abspath(__file__))
         try:
-            if motor.EH_WINDOWS:
-                self.iconbitmap(os.path.join(pasta, "icone.ico"))
-            else:
-                self.iconphoto(True, tk.PhotoImage(file=os.path.join(pasta, "icone.png")))
+            import tkinter.font as tkfont
+            familias = set(tkfont.families(self))
+            if TIT not in familias:
+                TIT = "Georgia"
+            if TXT not in familias:
+                TXT = "Georgia"
         except Exception:
             pass
+
+        self.title("Forja de Pergaminhos")
+        self.geometry("1360x900")
+        self.minsize(1120, 720)
+        try:
+            if motor.EH_WINDOWS:
+                self.iconbitmap(os.path.join(PASTA, "icone.ico"))
+            else:
+                self.iconphoto(True, tk.PhotoImage(file=os.path.join(PASTA, "icone.png")))
+        except Exception:
+            pass
+
+        self._arq_config = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
+                                        "ForjaDePergaminhos", "config.json")
+        self.tema = self._ler_config().get("tema", "escuro")
         self._fila = queue.Queue()
         self._ocupado = False
+        self._prog = None
+        self._anim_fase = 0
+        self._agendado = None
+        self._fundo_img = None
+        self._folha_img = None
+        self.tela = None
+        self.area = None
         self.estilos()
-
-        topo = tk.Frame(self, bg=BRANCO, height=56)
-        topo.pack(fill="x")
-        topo.pack_propagate(False)
-        tk.Label(topo, text="Forja de", bg=BRANCO, fg=TEXTO, font=(FONTE, 18, "bold")).pack(side="left", padx=(20, 4))
-        tk.Label(topo, text="Pergaminhos", bg=BRANCO, fg=DESTAQUE, font=(FONTE, 18, "bold")).pack(side="left")
-        self.voltar = ttk.Button(topo, text="← Todas as ferramentas", command=self.inicio)
-        tk.Label(topo, text="tudo roda no seu computador", bg=BRANCO, fg=CINZA,
-                 font=(FONTE, 9)).pack(side="right", padx=20)
-
-        rodape = tk.Frame(self, bg=BRANCO, height=30)
-        rodape.pack(side="bottom", fill="x")
-        self.barra = ttk.Progressbar(rodape, mode="indeterminate", length=160)
-        self.msg = tk.Label(rodape, text="Pronto", bg=BRANCO, fg=CINZA, font=(FONTE, 9))
-        self.msg.pack(side="left", padx=12)
-
-        self.conteudo = tk.Frame(self, bg=FUNDO)
-        self.conteudo.pack(fill="both", expand=True, padx=24, pady=16)
-        self.atual = None
+        self.montar_moldura()
+        self.aplicar_tema()
         self.inicio()
         self.after(100, self._ler_fila)
 
+    # ---------------- configuração
+    def _ler_config(self):
+        try:
+            with open(self._arq_config, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _salvar_config(self):
+        try:
+            os.makedirs(os.path.dirname(self._arq_config), exist_ok=True)
+            with open(self._arq_config, "w", encoding="utf-8") as f:
+                json.dump({"tema": self.tema}, f)
+        except Exception:
+            pass
+
+    # ---------------- estilos
     def estilos(self):
         s = ttk.Style(self)
-        try:
-            s.theme_use("vista" if motor.EH_WINDOWS else "clam")
-        except tk.TclError:
-            s.theme_use("clam")
-        s.configure(".", font=(FONTE, 10))
-        s.configure("TRadiobutton", background=FUNDO)
-        s.configure("TCheckbutton", background=FUNDO)
-        s.configure("Acao.TButton", font=(FONTE, 10, "bold"))
-        s.configure("Grande.TButton", font=(FONTE, 12, "bold"), padding=(22, 8))
+        s.theme_use("clam")
+        s.configure(".", font=F(17), background=PAPEL, foreground=TINTA)
+        filhos = {"sticky": "nsew", "children": [("Button.padding", {"sticky": "nsew", "children": [
+            ("Button.label", {"sticky": "nsew"})]})]}
+        s.element_create("Tabua.border", "image", img("tabua_normal.png"),
+                         ("pressed", img("tabua_pressed.png")), ("active", img("tabua_hover.png")),
+                         border=(12, 10), sticky="nsew", width=36, height=34)
+        s.element_create("Selo.border", "image", img("acao_normal.png"),
+                         ("pressed", img("acao_pressed.png")), ("active", img("acao_hover.png")),
+                         border=(27, 26), sticky="nsew", width=60, height=54)
+        for nome in ("TButton", "Acao.TButton"):
+            s.layout(nome, [("Tabua.border", filhos)])
+            s.configure(nome, foreground="#f6e7c8", font=T(16), padding=(14, 3), anchor="center")
+            s.map(nome, foreground=[("disabled", "#b9a27c")])
+        s.layout("Grande.TButton", [("Selo.border", filhos)])
+        s.configure("Grande.TButton", foreground="#fbe9d2", font=T(21), padding=(34, 2), anchor="center")
+        for nome in ("TRadiobutton", "TCheckbutton"):
+            s.configure(nome, background=PAPEL, foreground=TINTA2, font=F(17), indicatorcolor=CAMPO,
+                        indicatorbackground=CAMPO, upperbordercolor="#a9875a", lowerbordercolor="#a9875a")
+            s.map(nome, background=[("active", PAPEL)], indicatorcolor=[("selected", LACRE)])
+        for nome in ("TEntry", "TCombobox", "TSpinbox"):
+            s.configure(nome, fieldbackground=CAMPO, foreground=TINTA, bordercolor="#a9875a",
+                        lightcolor=CAMPO, darkcolor="#c9b07e", arrowcolor=TINTA2, background=PAPEL_ESC,
+                        insertcolor=TINTA, padding=4)
+        s.map("TCombobox", fieldbackground=[("readonly", CAMPO)], foreground=[("readonly", TINTA)])
+        s.configure("Horizontal.TScale", troughcolor="#d8c194", background="#8a6430", bordercolor="#8a6430")
+        s.configure("Vertical.TScrollbar", background="#b8995f", troughcolor=PAPEL_ESC, arrowcolor=TINTA,
+                    bordercolor="#a9875a", lightcolor="#c9ab70", darkcolor="#8a6430")
+        for w in ("Label", "Listbox", "Text", "Entry", "Button", "Spinbox"):
+            self.option_add(f"*{w}.font", F(17))
+        self.option_add("*TCombobox*Listbox.font", F(16))
+        self.option_add("*TCombobox*Listbox.background", CAMPO)
+        self.option_add("*TCombobox*Listbox.foreground", TINTA)
+        self.option_add("*TCombobox*Listbox.selectBackground", "#e2c88f")
 
+    # ---------------- moldura: topo, área e status
+    def montar_moldura(self):
+        self.topo = tk.Frame(self, height=72)
+        self.topo.pack(fill="x")
+        self.topo.pack_propagate(False)
+        logo = Image.open(os.path.join(PASTA, "icone.png")).resize((46, 46), Image.LANCZOS)
+        self._logo = ImageTk.PhotoImage(logo)
+        self.l_logo = tk.Label(self.topo, image=self._logo, bd=0)
+        self.l_logo.pack(side="left", padx=(24, 12))
+        self.l_nome = tk.Label(self.topo, text="Forja de Pergaminhos", font=T(30))
+        self.l_nome.pack(side="left")
+        self.voltar = ttk.Button(self.topo, text="← Voltar ao salão", command=self.inicio)
+        self.chave = tk.Label(self.topo, cursor="hand2", bd=0)
+        self.chave.pack(side="right", padx=(8, 26))
+        self.chave.bind("<Button-1>", lambda e: self.trocar_tema())
+        self.l_tema = tk.Label(self.topo, font=T(15))
+        self.l_tema.pack(side="right")
+        self.l_tema.bind("<Button-1>", lambda e: self.trocar_tema())
+        self.linha_topo = tk.Frame(self, height=2)
+        self.linha_topo.pack(fill="x")
+
+        self.rodape = tk.Frame(self, height=34)
+        self.rodape.pack(side="bottom", fill="x")
+        self.rodape.pack_propagate(False)
+        self.linha_rod = tk.Frame(self, height=1)
+        self.linha_rod.pack(side="bottom", fill="x")
+        self.brasa = tk.Canvas(self.rodape, width=22, height=22, highlightthickness=0)
+        self.brasa.pack(side="left", padx=(14, 6))
+        self.l_status = tk.Label(self.rodape, font=T(15), anchor="w")
+        self.l_status.pack(side="left")
+        self.metal = tk.Canvas(self.rodape, width=280, height=14, highlightthickness=0)
+        versao = ""
+        try:
+            with open(os.path.join(PASTA, "versao.txt"), encoding="utf-8") as f:
+                versao = "versão " + f.read().strip()
+        except Exception:
+            pass
+        self.l_versao = tk.Label(self.rodape, text=versao, font=F(14, "italic"))
+        self.l_versao.pack(side="right", padx=14)
+
+        self.cv = tk.Canvas(self, highlightthickness=0, bd=0)
+        self.cv.pack(fill="both", expand=True)
+        self.cv.bind("<Configure>", self._redimensionou)
+        self.cv.bind("<MouseWheel>", self._rolar)
+        self.cv.bind("<Button-4>", lambda e: self._rolar(e, -1))
+        self.cv.bind("<Button-5>", lambda e: self._rolar(e, 1))
+        self._estado = "fria"
+        self._texto_status = ESTADOS["fria"][2]
+
+    def _rolar(self, e, d=None):
+        if self.tela != "salao":
+            return
+        passos = d if d is not None else int(-e.delta / 120)
+        self.cv.yview_scroll(passos * 3, "units")
+
+    def trocar_tema(self):
+        self.tema = "claro" if self.tema == "escuro" else "escuro"
+        self._salvar_config()
+        self.aplicar_tema()
+        if self.tela == "salao":
+            self.desenhar_salao()
+        elif self.tela == "ferramenta":
+            self.desenhar_fundo()
+            self.cv.tag_lower("fundo")
+
+    def aplicar_tema(self):
+        t = TEMAS[self.tema]
+        for w in (self.topo, self.l_logo, self.l_nome, self.l_tema, self.chave, self.rodape, self.brasa,
+                  self.l_status, self.metal, self.l_versao):
+            w.config(bg=t["barra"])
+        self.l_nome.config(fg=t["titulo"])
+        self.l_tema.config(fg=t["sub"], text=t["rotulo"])
+        self.l_status.config(fg=t["sub"])
+        self.l_versao.config(fg=t["sub"])
+        self.linha_topo.config(bg=t["borda"])
+        self.linha_rod.config(bg=t["borda"])
+        self.chave.config(image=img(f"chave_{self.tema}.png"))
+        self.cv.config(bg=t["fundo"])
+        self.estado(self._estado, self._texto_status)
+
+    # ---------------- fundo
+    def desenhar_fundo(self):
+        w, h = max(1, self.cv.winfo_width()), max(1, self.cv.winfo_height())
+        if self.tela == "salao":
+            h = max(h, int(float(self.cv.cget("scrollregion").split()[3])) if self.cv.cget("scrollregion") else h)
+        base = pil(f"fundo_{self.tema}.jpg")
+        esc = max(w / base.width, h / base.height, 1)
+        im = base.resize((int(base.width * esc) + 1, int(base.height * esc) + 1), Image.BILINEAR) if esc > 1 else base
+        im = im.crop((0, 0, w, h))
+        self._fundo_img = ImageTk.PhotoImage(im)
+        self.cv.delete("fundo")
+        self.cv.create_image(0, 0, anchor="nw", image=self._fundo_img, tags="fundo")
+        self.cv.tag_lower("fundo")
+
+    def _redimensionou(self, e=None):
+        if self._agendado:
+            self.after_cancel(self._agendado)
+        self._agendado = self.after(120, self._refazer)
+
+    def _refazer(self):
+        self._agendado = None
+        if self.tela == "salao":
+            self.desenhar_salao()
+        elif self.tela == "ferramenta":
+            self.desenhar_folha()
+
+    # ---------------- salão
     def limpar(self):
-        if self.atual is not None:
-            self.atual.destroy()
-        for w in self.conteudo.winfo_children():
-            w.destroy()
+        if self.area is not None:
+            self.area.destroy()
+            self.area = None
+        self.cv.delete("all")
 
     def inicio(self):
         self.limpar()
+        self.tela = "salao"
         self.voltar.pack_forget()
-        rol = Rolavel(self.conteudo)
-        rol.pack(fill="both", expand=True)
-        self.atual = rol
-        tk.Label(rol.dentro, text="O que vamos forjar hoje?", bg=FUNDO, fg=TEXTO,
-                 font=(FONTE, 20, "bold")).grid(row=0, column=0, columnspan=4, pady=(4, 2))
-        tk.Label(rol.dentro, text="Sem internet, sem limite, sem mandar seus arquivos para ninguém.",
-                 bg=FUNDO, fg=CINZA, font=(FONTE, 11)).grid(row=1, column=0, columnspan=4, pady=(0, 16))
-        for c in range(4):
-            rol.dentro.columnconfigure(c, weight=1, uniform="c")
+        if not self._ocupado:
+            self.estado("fria")
+        self.cv.yview_moveto(0)
+        self.desenhar_salao()
+
+    def desenhar_salao(self):
+        t = TEMAS[self.tema]
+        cv = self.cv
+        cv.delete("all")
+        W = max(cv.winfo_width(), 600)
+        passo_x, passo_y = CW - 12, 168
+        cols = max(2, min(4, (W - 10) // passo_x))
+        linhas = (len(FERRAMENTAS) + cols - 1) // cols
+        x0 = (W - cols * passo_x) // 2 - 6
+        y0 = 132
+        altura = y0 + linhas * passo_y + 40
+        cv.configure(scrollregion=(0, 0, W, max(altura, cv.winfo_height())))
+        self.desenhar_fundo()
+        cv.create_text(W // 2, 54, text="O que vamos forjar hoje?", font=T(38), fill=t["titulo"])
+        cv.create_text(W // 2, 92, text="Escolha um pergaminho para abrir a ferramenta",
+                       font=F(20, "italic"), fill=t["sub"])
+        m = W // 2
+        cv.create_line(m - 180, 116, m - 26, 116, fill=t["titulo"], width=1)
+        cv.create_line(m + 26, 116, m + 180, 116, fill=t["titulo"], width=1)
+        cv.create_polygon(m, 110, m + 6, 116, m, 122, m - 6, 116, fill=t["titulo"])
+        for dx in (-16, 16):
+            cv.create_oval(m + dx - 3, 113, m + dx + 3, 119, fill=t["titulo"], outline="")
         for i, (cls, sigla, cor) in enumerate(FERRAMENTAS):
-            self.cartao(rol.dentro, cls, sigla, cor).grid(row=2 + i // 4, column=i % 4, sticky="nsew", padx=7, pady=7)
+            x = x0 + (i % cols) * passo_x
+            y = y0 + (i // cols) * passo_y
+            tag = f"c{i}"
+            base = cv.create_image(x, y, anchor="nw", image=img(f"cartao{i % 4}.png"), tags=(tag,))
+            cv.create_image(x + 80, y + 95, image=img(f"selo_{cor}.png"), tags=(tag,))
+            cv.create_text(x + 80, y + 94, text=sigla, font=T(19), fill="#fbead0", tags=(tag,))
+            cv.create_text(x + 110, y + 72, text=cls.titulo, anchor="nw", font=T(18), fill=TINTA,
+                           width=172, tags=(tag,))
+            cv.create_text(x + 110, y + 96, text=cls.resumo, anchor="nw", font=F(15, "bold"), fill=TINTA2,
+                           width=168, tags=(tag,))
+            normal, brilho = img(f"cartao{i % 4}.png"), img(f"cartao{i % 4}_brilho.png")
+            cv.tag_bind(tag, "<Enter>", lambda e, b=base, im=brilho: (cv.itemconfig(b, image=im),
+                                                                     cv.config(cursor="hand2")))
+            cv.tag_bind(tag, "<Leave>", lambda e, b=base, im=normal: (cv.itemconfig(b, image=im),
+                                                                     cv.config(cursor="")))
+            cv.tag_bind(tag, "<Button-1>", lambda e, c=cls, xx=x, yy=y: self.abrir(c, xx, yy))
 
-    def cartao(self, pai, cls, sigla, cor):
-        f = tk.Frame(pai, bg=BRANCO, padx=16, pady=14, highlightthickness=1, highlightbackground="#e2e3ea",
-                     cursor="hand2")
-        ic = tk.Label(f, text=sigla, bg=cor, fg="white", font=(FONTE, 13, "bold"), width=3)
-        ic.pack(anchor="w")
-        t = tk.Label(f, text=cls.titulo, bg=BRANCO, fg=TEXTO, font=(FONTE, 12, "bold"))
-        t.pack(anchor="w", pady=(8, 2))
-        d = tk.Label(f, text=getattr(cls, "resumo", cls.descricao), bg=BRANCO, fg=CINZA, font=(FONTE, 9), wraplength=230,
-                     justify="left", height=3, anchor="nw")
-        d.pack(anchor="w", fill="x")
-        for w in (f, ic, t, d):
-            w.bind("<Button-1>", lambda e: self.abrir(cls))
-            w.bind("<Enter>", lambda e: f.config(highlightbackground=cor))
-            w.bind("<Leave>", lambda e: f.config(highlightbackground="#e2e3ea"))
-        return f
+    # ---------------- abrir pergaminho (animação)
+    def _retangulo_folha(self):
+        W, H = self.cv.winfo_width(), self.cv.winfo_height()
+        return 22, 12, W - 22, H - 10
 
-    def abrir(self, cls):
-        self.limpar()
-        self.voltar.pack(side="left", padx=24)
-        self.atual = cls(self)
+    def abrir(self, cls, x, y):
+        cv = self.cv
+        cv.config(cursor="")
+        ox, oy = cv.canvasx(0), cv.canvasy(0)
+        ini = (x + 40 - ox, y + 28 - oy, x + CW - 40 - ox, y + CH - 24 - oy)
+        cv.yview_moveto(0)
+        cv.delete("all")
+        cv.configure(scrollregion=(0, 0, cv.winfo_width(), cv.winfo_height()))
+        self.tela = "animando"
+        self.desenhar_fundo()
+        fim = self._retangulo_folha()
+        quadros = []
+        for k in range(1, 8):
+            t = 1 - (1 - k / 7) ** 2.2
+            r = [a + (b - a) * t for a, b in zip(ini, fim)]
+            quadros.append(r)
+        for r in quadros:
+            im = ImageTk.PhotoImage(compor_folha(r[2] - r[0], r[3] - r[1], rapido=True))
+            cv.delete("anim")
+            cv.create_image(r[0], r[1], anchor="nw", image=im, tags="anim")
+            cv._anim = im
+            cv.update_idletasks()
+            cv.update()
+            self.after(14)
+        self.montar_ferramenta(cls)
+
+    def montar_ferramenta(self, cls):
+        self.cv.delete("all")
+        self.tela = "ferramenta"
+        self.voltar.pack(side="left", padx=26)
+        self.area = tk.Frame(self.cv, bg=PAPEL)
+        self.atual = cls(self, self.area)
         self.atual.pack(fill="both", expand=True)
+        self.desenhar_folha()
 
-    # ---------------- tarefas em segundo plano
+    def desenhar_folha(self):
+        cv = self.cv
+        x0, y0, x1, y1 = self._retangulo_folha()
+        w, h = x1 - x0, y1 - y0
+        self.desenhar_fundo()
+        self._folha_img = ImageTk.PhotoImage(compor_folha(w, h))
+        cv.delete("folha")
+        cv.create_image(x0, y0, anchor="nw", image=self._folha_img, tags="folha")
+        rh = max(18, min(40, int(h * 0.06)))
+        ax0, ay0 = x0 + 18 + 44, y0 + rh + 16
+        ax1, ay1 = x1 - 18 - 44, y1 - rh - 12
+        cv.delete("janela")
+        cv.create_window(ax0, ay0, anchor="nw", window=self.area, width=ax1 - ax0, height=ay1 - ay0,
+                         tags="janela")
+        cv.tag_raise("janela")
+
+    # ---------------- status da forja
+    def estado(self, tipo, texto=None):
+        self._estado = tipo
+        self._texto_status = texto or ESTADOS[tipo][2]
+        cor, brilho, _ = ESTADOS[tipo]
+        t = TEMAS[self.tema]
+        b = self.brasa
+        b.delete("all")
+        if brilho:
+            b.create_oval(1, 1, 21, 21, fill="", outline=brilho, width=2)
+        b.create_oval(5, 5, 17, 17, fill=cor, outline="#000000" if tipo == "fria" else brilho)
+        self.l_status.config(text=self._texto_status, fg=t["titulo"] if tipo != "fria" else t["sub"])
+        if tipo == "acesa":
+            self.metal.pack(side="left", padx=14, after=self.l_status)
+            if self._prog is None:
+                self._animar_metal()
+        else:
+            self.metal.pack_forget()
+
+    def _animar_metal(self):
+        if self._estado != "acesa":
+            self._prog = None
+            return
+        m = self.metal
+        m.delete("all")
+        w, h = 280, 14
+        m.create_rectangle(0, 0, w - 1, h - 1, fill="#2a2620", outline="#6b5530")
+        frac = self._progresso_frac()
+        if frac is None:  # sem número: brilho correndo
+            self._anim_fase = (self._anim_fase + 7) % (w + 80)
+            x = self._anim_fase - 80
+            for i, cor in enumerate(("#8e2a0a", "#c4471a", "#e0661c", "#ffb060", "#ffd27a")):
+                m.create_rectangle(max(1, x + i * 12), 2, min(w - 2, x + 80 - i * 12), h - 3, fill=cor, outline="")
+        else:
+            fim = max(2, int((w - 3) * frac))
+            passos = 6
+            for i in range(passos):
+                cor = ("#8e2a0a", "#b33a12", "#d0561a", "#e0661c", "#f39a45", "#ffd27a")[i]
+                m.create_rectangle(1 + fim * i // passos, 2, 1 + fim * (i + 1) // passos, h - 3, fill=cor, outline="")
+        self._prog = self.after(40, self._animar_metal)
+
+    def _progresso_frac(self):
+        r = re.search(r"(\d+)\s+de\s+(\d+)", self._texto_status or "")
+        if r and int(r.group(2)) > 0:
+            return min(1, int(r.group(1)) / int(r.group(2)))
+        return None
+
     def status(self, texto):
         self._fila.put(("status", texto))
 
     def tarefa(self, funcao, alvo, mensagem):
         if self._ocupado:
-            messagebox.showinfo("Aguarde", "Ainda estou terminando a tarefa anterior.")
+            messagebox.showinfo("Aguarde", "A forja ainda está trabalhando no pedido anterior.")
             return
         self._ocupado = True
-        self.barra.pack(side="right", padx=12)
-        self.barra.start(12)
-        self.msg.config(text="Trabalhando...")
+        self.estado("acesa", "Forjando...")
 
         def rodar():
             try:
@@ -1244,20 +1726,19 @@ class App(BaseTk):
             while True:
                 tipo, dado = self._fila.get_nowait()
                 if tipo == "status":
-                    self.msg.config(text=dado)
+                    self.estado("acesa", "Forjando... " + dado)
                     continue
                 self._ocupado = False
-                self.barra.stop()
-                self.barra.pack_forget()
                 if tipo == "ok":
                     alvo, mensagem = dado
-                    self.msg.config(text=mensagem)
+                    self.estado("pronta", "Forjado! " + mensagem)
                     oque = "a pasta" if os.path.isdir(alvo) else "o arquivo"
-                    if messagebox.askyesno("Pronto!", f"{mensagem}\n\nQuer abrir {oque} agora?"):
+                    if messagebox.askyesno("Forjado!", f"{mensagem}\n\nQuer abrir {oque} agora?"):
                         motor.abrir(alvo)
                 else:
-                    self.msg.config(text="Deu erro")
-                    messagebox.showerror("Não deu certo", dado)
+                    curto = dado.strip().splitlines()[0][:90] if dado.strip() else "erro desconhecido"
+                    self.estado("falha", "A forja falhou · " + curto)
+                    messagebox.showerror("A forja falhou", dado)
         except queue.Empty:
             pass
         self.after(100, self._ler_fila)

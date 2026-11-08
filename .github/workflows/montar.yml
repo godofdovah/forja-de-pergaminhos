@@ -11,6 +11,9 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      VERSAO: 1.0.${{ github.run_number }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
 
@@ -23,31 +26,55 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      - name: Gravar a versão
+        shell: pwsh
+        run: Set-Content -Path versao.txt -Value $env:VERSAO -NoNewline
+
       - name: Montar o programa (.exe)
         run: >
           pyinstaller --noconfirm --windowed --name "Forja de Pergaminhos"
           --icon icone.ico --add-data "icone.ico;." --add-data "icone.png;."
-          --collect-all tkinterdnd2 --collect-all pdf2docx meupdf.py
+          --add-data "assets;assets" --add-data "versao.txt;."
+          --hidden-import PIL._tkinter_finder --collect-all tkinterdnd2 --collect-all pdf2docx meupdf.py
 
       - name: Testar se o programa abre
         shell: pwsh
         run: |
           $p = Start-Process -FilePath "dist\Forja de Pergaminhos\Forja de Pergaminhos.exe" -PassThru
-          Start-Sleep -Seconds 15
+          Start-Sleep -Seconds 20
           if ($p.HasExited) { Get-Content "dist\Forja de Pergaminhos\_internal\erro.txt" -ErrorAction SilentlyContinue; exit 1 }
           Stop-Process -Id $p.Id -Force
 
-      - name: Criar o instalador
+      - name: Comparar com a versão anterior
+        shell: pwsh
+        run: |
+          gh release download --pattern manifesto.json --dir anterior 2>$null
+          if (-not (Test-Path anterior\manifesto.json)) { Write-Host "Primeira versão com manifesto" }
+          python ferramentas/gerar_atualizacao.py "dist/Forja de Pergaminhos" saida/manifesto.json anterior/manifesto.json
+
+      - name: Criar os instaladores
         shell: pwsh
         run: |
           $iscc = (Get-ChildItem "C:\Program Files (x86)\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
           if (-not $iscc) { choco install innosetup -y --no-progress; $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" }
-          & $iscc "/DAppVersion=1.0.${{ github.run_number }}" instalador.iss
+          & $iscc "/DAppVersion=$env:VERSAO" instalador.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (Test-Path atualizacao_arquivos.iss) {
+            & $iscc "/DAppVersion=$env:VERSAO" atualizacao.iss
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+          Get-ChildItem saida
 
       - name: Publicar para download
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: Forja de Pergaminhos 1.0.${{ github.run_number }}
-          body: Baixe o arquivo Instalar-Forja-de-Pergaminhos.exe e dê dois cliques.
-          files: saida/Instalar-Forja-de-Pergaminhos.exe
+          tag_name: v${{ env.VERSAO }}
+          name: Forja de Pergaminhos ${{ env.VERSAO }}
+          body: |
+            **Instalar-Forja-de-Pergaminhos.exe** — versão completa, para instalar do zero.
+            **Atualizar-Forja-de-Pergaminhos.exe** — só o que mudou, para quem já tem a Forja instalada (quando disponível).
+          files: |
+            saida/Instalar-Forja-de-Pergaminhos.exe
+            saida/Atualizar-Forja-de-Pergaminhos.exe
+            saida/manifesto.json
+          fail_on_unmatched_files: false
