@@ -452,6 +452,64 @@ class Visualizador(tk.Frame):
 # =====================================================================
 # Base das ferramentas (tudo isto fica em cima do pergaminho aberto)
 # =====================================================================
+class AreaRolavel(tk.Frame):
+    """Miolo do pergaminho: ocupa o espaço todo e só ganha rolagem quando o conteúdo não cabe."""
+
+    def __init__(self, pai):
+        super().__init__(pai, bg=PAPEL)
+        self.cv = tk.Canvas(self, bg=PAPEL, highlightthickness=0, bd=0)
+        self.barra = ttk.Scrollbar(self, orient="vertical", command=self.cv.yview)
+        self.cv.configure(yscrollcommand=self.barra.set)
+        self.cv.pack(side="left", fill="both", expand=True)
+        self.dentro = tk.Frame(self.cv, bg=PAPEL)
+        self._id = self.cv.create_window(0, 0, anchor="nw", window=self.dentro)
+        self._com_barra = False
+        self._ultimo = None
+        self.cv.bind("<Configure>", lambda e: self._ajustar())
+        self.after(300, self._vigiar)
+        self.dentro.bind("<Configure>", lambda e: self.after_idle(self._ajustar))
+        for w in (self.cv, self.dentro):
+            w.bind("<Enter>", lambda e: self._roda(True))
+            w.bind("<Leave>", lambda e: self._roda(False))
+
+    def _vigiar(self):
+        """O conteúdo pode crescer depois de montado (ex.: trocar o sentido da conversão)."""
+        if not self.winfo_exists():
+            return
+        if self.winfo_ismapped():
+            atual = (self.dentro.winfo_reqheight(), self.cv.winfo_height())
+            if atual != self._ultimo:
+                self._ultimo = atual
+                self._ajustar()
+        self.after(400, self._vigiar)
+
+    def _ajustar(self):
+        if not self.winfo_exists():
+            return
+        w, h = self.cv.winfo_width(), self.cv.winfo_height()
+        pedido = self.dentro.winfo_reqheight()
+        alto = max(h, pedido)
+        self.cv.itemconfigure(self._id, width=w, height=alto)
+        self.cv.configure(scrollregion=(0, 0, w, alto))
+        precisa = pedido > h + 2
+        if precisa != self._com_barra:
+            self._com_barra = precisa
+            if precisa:
+                self.barra.pack(side="right", fill="y")
+            else:
+                self.barra.pack_forget()
+                self.cv.yview_moveto(0)
+
+    def _roda(self, ligar):
+        if ligar and self._com_barra:
+            self.cv.bind_all("<MouseWheel>", lambda e: self.cv.yview_scroll(int(-e.delta / 120), "units"))
+            self.cv.bind_all("<Button-4>", lambda e: self.cv.yview_scroll(-3, "units"))
+            self.cv.bind_all("<Button-5>", lambda e: self.cv.yview_scroll(3, "units"))
+        elif not ligar:
+            for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                self.cv.unbind_all(ev)
+
+
 class Ornamento(tk.Canvas):
     def __init__(self, pai, largura=600):
         super().__init__(pai, height=14, bg=PAPEL, highlightthickness=0, width=largura)
@@ -514,9 +572,9 @@ class ComVisualizador(Ferramenta):
     modo = "retangulo"
 
     def montar(self):
-        esq = tk.Frame(self.corpo, bg=FUNDO, width=360)
+        esq = tk.Frame(self.corpo, bg=FUNDO)
         esq.pack(side="left", fill="y", padx=(0, 16))
-        esq.pack_propagate(False)
+        tk.Frame(esq, bg=FUNDO, width=360, height=1).pack()   # mantém a largura da coluna
         self.arquivo = ArquivoUnico(esq, self._abriu)
         self.arquivo.pack(anchor="w")
         self.esq = esq
@@ -1469,8 +1527,10 @@ class App(tk.Tk):
             pass
 
         self.title("Forja de Pergaminhos")
-        self.geometry("1360x900")
-        self.minsize(1120, 720)
+        lw = min(1360, self.winfo_screenwidth() - 40)
+        lh = min(900, self.winfo_screenheight() - 80)
+        self.geometry(f"{lw}x{lh}+{max(0, (self.winfo_screenwidth() - lw) // 2)}+{max(0, (self.winfo_screenheight() - lh) // 2 - 20)}")
+        self.minsize(980, 640)
         try:
             if motor.EH_WINDOWS:
                 self.iconbitmap(os.path.join(PASTA, "icone.ico"))
@@ -1821,8 +1881,8 @@ class App(tk.Tk):
         if getattr(cls, "lembrar", True) and cls in self.instancias:
             self.area, self.atual = self.instancias[cls]
         else:
-            self.area = tk.Frame(self.cv, bg=PAPEL)
-            self.atual = cls(self, self.area)
+            self.area = AreaRolavel(self.cv)
+            self.atual = cls(self, self.area.dentro)
             self.atual.pack(fill="both", expand=True)
             if getattr(cls, "lembrar", True):
                 self.instancias[cls] = (self.area, self.atual)

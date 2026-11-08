@@ -49,6 +49,7 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction Stop } catch { Write-Host "Resolucao: $_" }
           choco install ghostscript -y --no-progress | Out-Null
           $env:PATH += ";" + ((Get-ChildItem "C:\Program Files\gs\*\bin" -Directory | Select-Object -First 1).FullName)
           $p = Start-Process -FilePath "dist\Forja de Pergaminhos\Forja de Pergaminhos.exe" -ArgumentList "--autoteste","$PWD\testes_ci" -PassThru
@@ -72,7 +73,7 @@ jobs:
           git config user.email "robo-da-forja@users.noreply.github.com"
           git checkout --orphan resultados
           git rm -rf --cached . | Out-Null
-          git add -f testes_ci/tela_*.png testes_ci/fluxo_*.png testes_ci/resultados.txt
+          git add -f testes_ci/tela_*.png testes_ci/fluxo_*.png testes_ci/botao_*.png testes_ci/resultados.txt
           git commit -m "Resultados do teste automático"
           git push -f origin resultados
 

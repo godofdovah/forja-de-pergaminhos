@@ -120,6 +120,27 @@ def teste_telas(pasta, modulo):
         except Exception as e:
             _escrever(pasta, f"FOTO    {nome}: {e}")
 
+    def botao_de_perto(nome):
+        achados = []
+
+        def busca(w):
+            for f in w.winfo_children():
+                if isinstance(f, modulo.ttk.Button) and str(f.cget("style")) == "Grande.TButton" and f.winfo_ismapped():
+                    achados.append(f)
+                busca(f)
+        busca(app.atual)
+        if not achados:
+            return
+        b = achados[0]
+        app.update()
+        x, y = b.winfo_rootx() - 10, b.winfo_rooty() - 10
+        try:
+            ImageGrab.grab(bbox=(x, y, x + b.winfo_width() + 20, y + b.winfo_height() + 20),
+                           all_screens=True).save(os.path.join(pasta, f"botao_{nome}.png"))
+            _escrever(pasta, f"BOTAO   {nome}: {b.winfo_width()}x{b.winfo_height()} '{b.cget('text')}'")
+        except Exception as e:
+            _escrever(pasta, f"BOTAO   {nome}: {e}")
+
     def roteiro():
         try:
             app.tema = "escuro"
@@ -145,6 +166,7 @@ def teste_telas(pasta, modulo):
                 except Exception as e:
                     _escrever(pasta, f"TELA    {cls.__name__}: {e}")
                 foto(f"{i + 2:02d}_{cls.__name__}")
+                botao_de_perto(f"{i + 2:02d}_{cls.__name__}")
             _escrever(pasta, f"TELAS   {len(fotos)} fotos tiradas")
         except Exception:
             _escrever(pasta, "TELAS   erro:\n" + traceback.format_exc())
