@@ -2,7 +2,7 @@ name: Montar instalador
 
 on:
   push:
-    branches: [main]
+    branches: [main, teste]
   workflow_dispatch:
 
 permissions:
@@ -45,7 +45,27 @@ jobs:
           if ($p.HasExited) { Get-Content "dist\Forja de Pergaminhos\_internal\erro.txt" -ErrorAction SilentlyContinue; exit 1 }
           Stop-Process -Id $p.Id -Force
 
+      - name: Teste automático (todas as ferramentas e telas)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          choco install ghostscript -y --no-progress | Out-Null
+          $env:PATH += ";" + ((Get-ChildItem "C:\Program Files\gs\*\bin" -Directory | Select-Object -First 1).FullName)
+          $p = Start-Process -FilePath "dist\Forja de Pergaminhos\Forja de Pergaminhos.exe" -ArgumentList "--autoteste","$PWD\testes_ci" -PassThru
+          $p | Wait-Process -Timeout 1500 -ErrorAction SilentlyContinue
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; Write-Host "AUTOTESTE NAO TERMINOU" }
+          Get-Content testes_ci\resultados.txt -ErrorAction SilentlyContinue
+          Get-Content "dist\Forja de Pergaminhos\_internal\erro.txt" -ErrorAction SilentlyContinue
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: testes-windows
+          path: testes_ci/
+          retention-days: 14
+
       - name: Comparar com a versão anterior
+        if: github.ref == 'refs/heads/main'
         shell: pwsh
         run: |
           gh release download --pattern manifesto.json --dir anterior 2>$null
@@ -53,6 +73,7 @@ jobs:
           python ferramentas/gerar_atualizacao.py "dist/Forja de Pergaminhos" saida/manifesto.json anterior/manifesto.json
 
       - name: Criar os instaladores
+        if: github.ref == 'refs/heads/main'
         shell: pwsh
         run: |
           $iscc = (Get-ChildItem "C:\Program Files (x86)\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
@@ -66,6 +87,7 @@ jobs:
           Get-ChildItem saida
 
       - name: Publicar para download
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VERSAO }}

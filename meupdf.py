@@ -1745,6 +1745,10 @@ class App(tk.Tk):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 2 and sys.argv[1] == "--autoteste":
+        import autoteste
+        autoteste.rodar(sys.argv[2], sys.modules[__name__])
+        sys.exit(0)
     try:
         App().mainloop()
     except SystemExit:
