@@ -268,7 +268,38 @@ def teste_fluxos(pasta, modulo):
             esperar(60)
             conferir("Cancelar para a forja", app._estado == "cancelada", f"{time.time() - t0:.1f}s")
             foto("06_cancelada")
-            # 7. histórico
+            # 7. dividir montando grupos (PDF grande, junta 3+4 e 7 a 9)
+            longo = os.path.join(pasta, "longo.pdf")
+            dd = motor.fitz.open()
+            for k in range(40):
+                pg = dd.new_page()
+                pg.insert_text((72, 100), f"Pagina {k + 1}", fontsize=40)
+            dd.save(longo)
+            dd.close()
+            app.inicio()
+            app.montar_ferramenta(modulo.Dividir)
+            app.atual.escolher(0)
+            sg = app.atual.sub
+            sg.arq.definir(longo)
+            ini = time.time()
+            while time.time() - ini < 4:
+                app.update()
+                time.sleep(0.05)
+            sg.alternar(2)                       # 3 junto com 4
+            sg.clicar(6, type("E", (), {"state": 0})())
+            sg.clicar(8, type("E", (), {"state": 1})())
+            sg.juntar_sel()                      # 7, 8 e 9 juntos
+            app.update()
+            foto("08_montar_grupos")
+            conferir("Montar grupos: plano certo", sg.plano.get().startswith("1 | 2 | 3-4 | 5 | 6 | 7-9 | 10"),
+                     sg.plano.get()[:40])
+            sg.rodar()
+            esperar()
+            gerados = sorted(x for x in app.ler_historico()[-1].get("saidas", []))
+            paginas = [motor.contar_paginas(x) for x in gerados]
+            conferir("Montar grupos: arquivos forjados", len(gerados) == 37 and sum(paginas) == 40,
+                     f"{len(gerados)} arquivos, {sum(paginas)} páginas")
+            # 8. histórico
             app.abrir_historico()
             app.update()
             n = len(app.ler_historico())

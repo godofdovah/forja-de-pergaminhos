@@ -104,6 +104,38 @@ def dividir_todas(entrada, pasta):
     return dividir_intervalos(entrada, ",".join(str(i) for i in range(1, total + 1)), pasta)
 
 
+def dividir_grupos(entrada, grupos, pasta, progresso=None, cancelado=None):
+    """
+    Divide o PDF inteiro em vários arquivos, um por grupo de páginas.
+    grupos: lista de listas de índices (começando em 0), ex.: [[0], [1], [2, 3], [4]].
+    Os arquivos vão para uma pasta nova "<nome>_dividido" dentro de `pasta`.
+    """
+    base = os.path.splitext(os.path.basename(entrada))[0]
+    sub = os.path.join(pasta, base + "_dividido")
+    n = 2
+    while os.path.exists(sub):
+        sub = os.path.join(pasta, f"{base}_dividido_{n}")
+        n += 1
+    os.makedirs(sub)
+    largura = len(str(len(grupos)))
+    saidas = []
+    with fitz.open(entrada) as doc:
+        for k, g in enumerate(grupos, 1):
+            if cancelado and cancelado():
+                raise Cancelado()
+            novo = fitz.open()
+            for i in g:
+                novo.insert_pdf(doc, from_page=i, to_page=i)
+            rotulo = f"pag{g[0] + 1}" if len(g) == 1 else f"pag{g[0] + 1}-{g[-1] + 1}"
+            s = os.path.join(sub, f"{base}_{k:0{largura}d}_{rotulo}.pdf")
+            _salvar(novo, s)
+            novo.close()
+            saidas.append(s)
+            if progresso:
+                progresso(k / len(grupos), f"arquivo {k} de {len(grupos)}")
+    return saidas
+
+
 def extrair_paginas(entrada, intervalos, saida):
     """Junta as páginas escolhidas num único PDF."""
     with fitz.open(entrada) as doc:

@@ -671,8 +671,8 @@ class Juntar(Ferramenta):
             self.app.tarefa(lambda: motor.juntar(arqs, s), s, "PDFs juntados!", self, arqs)
 
 
-class Dividir(Ferramenta):
-    titulo = "Dividir PDF"
+class DividirTexto(Ferramenta):
+    titulo = "Dividir por números"
     descricao = "Separe um intervalo de páginas, tire só as páginas que precisa ou transforme cada página num PDF."
 
     def montar(self):
@@ -713,6 +713,245 @@ class Dividir(Ferramenta):
                 s = self.salvar_como(motor.nome_saida(c, "paginas", ".pdf"))
                 if s:
                     self.app.tarefa(lambda: motor.extrair_paginas(c, pg, s), s, "Páginas extraídas!", self, [c])
+
+
+
+CORES_GRUPO = ("#e3c27e", "#a9c6e0", "#bcd9a8", "#e6b3ad", "#cdb8e0", "#e9d29a")
+
+
+class SepararGrupos(Ferramenta):
+    """Mostra todas as páginas; você decide o que fica sozinho e o que vai junto. Nenhuma página fica de fora."""
+    titulo = "Montar grupos"
+    descricao = ""
+    LARG = 96
+
+    def montar(self):
+        topo = tk.Frame(self.corpo, bg=FUNDO)
+        topo.pack(fill="x")
+        self.arq = ArquivoUnico(topo, self.abriu)
+        self.arq.pack(side="left")
+        self.info = tk.Label(topo, text="", bg=FUNDO, fg=TINTA, font=T(17))
+        self.info.pack(side="left", padx=18)
+        tk.Label(self.corpo, bg=FUNDO, fg=TINTA2, font=F(16), justify="left", wraplength=1100,
+                 text="Cada página começa sozinha. Clique em “+ juntar” embaixo de uma página para ela ir junto "
+                      "com a próxima (clique de novo para separar). Para várias de uma vez: clique na primeira "
+                      "página, Shift + clique na última e use “Juntar seleção”. Páginas da mesma cor viram "
+                      "um arquivo só.").pack(anchor="w", pady=(6, 6))
+        bar = tk.Frame(self.corpo, bg=FUNDO)
+        bar.pack(fill="x", pady=(0, 6))
+        for t, c in (("Juntar seleção", self.juntar_sel), ("Separar seleção", self.separar_sel),
+                     ("Tudo separado", self.tudo_separado), ("Tudo junto", self.tudo_junto)):
+            ttk.Button(bar, text=t, command=c).pack(side="left", padx=(0, 6))
+        self.grade = Rolavel(self.corpo, bg=PAPEL_ESC)
+        self.grade.pack(fill="both", expand=True)
+        self.grade.canvas.configure(height=330)
+        self.grade.dentro.bind("<Configure>", lambda e: self._reorganizar(), add="+")
+        plano = tk.Frame(self.corpo, bg=FUNDO)
+        plano.pack(fill="x", pady=(8, 0))
+        tk.Label(plano, text="Arquivos:", bg=FUNDO, fg=TINTA, font=T(16)).pack(side="left")
+        self.plano = tk.StringVar()
+        ttk.Entry(plano, textvariable=self.plano, font=F(16)).pack(side="left", fill="x", expand=True, padx=8)
+        ttk.Button(plano, text="Aplicar o que digitei", command=self.aplicar_texto).pack(side="left")
+        self.destino = Destino(self.corpo, "uma pasta nova, ao lado do PDF original")
+        self.destino.pack(anchor="w", pady=(8, 0))
+        self.botao = self.botao_principal(self.corpo, "Forjar arquivos", self.rodar)
+        self.n = 0
+        self.cortes = set()
+        self.cards = []
+        self.imgs = {}
+        self.sel = None
+        self._ancora = None
+        self._cols = 0
+        self._geracao = 0
+
+    # ---------- carregar o PDF
+    def abriu(self, c):
+        for w in self.grade.dentro.winfo_children():
+            w.destroy()
+        self.cards, self.imgs = [], {}
+        self.n = motor.contar_paginas(c)
+        self.cortes = set(range(self.n - 1))     # começa tudo separado
+        self.sel = None
+        self._cols = 0
+        for i in range(self.n):
+            f = tk.Frame(self.grade.dentro, padx=4, pady=4, cursor="hand2")
+            topo = tk.Label(f, font=T(13), anchor="w")
+            topo.pack(fill="x")
+            if not hasattr(self, "_vazio"):
+                self._vazio = tk.PhotoImage(width=self.LARG, height=int(self.LARG * 1.41))
+            im = tk.Label(f, image=self._vazio, bg="#d8c8a4", bd=0)
+            im.pack()
+            num = tk.Label(f, text=f"pág. {i + 1}", font=F(14))
+            num.pack()
+            lig = tk.Label(f, font=T(13, "underline"), cursor="hand2") if i < self.n - 1 else tk.Label(f, text=" ", font=T(13))
+            lig.pack()
+            for w in (f, topo, im, num):
+                w.bind("<Button-1>", lambda e, k=i: self.clicar(k, e))
+            if i < self.n - 1:
+                lig.bind("<Button-1>", lambda e, k=i: self.alternar(k))
+            self.cards.append((f, topo, im, num, lig))
+        self._reorganizar()
+        self.atualizar()
+        self._geracao += 1
+        self._miniaturas(c, self._geracao)
+
+    def _miniaturas(self, caminho, geracao):
+        fila = queue.Queue()
+        larg = self.LARG
+
+        def trabalhar():
+            try:
+                with motor.fitz.open(caminho) as d:
+                    for i, p in enumerate(d):
+                        if geracao != self._geracao:
+                            return
+                        z = larg / p.rect.width
+                        fila.put((i, p.get_pixmap(matrix=motor.fitz.Matrix(z, z), alpha=False).tobytes("ppm")))
+            except Exception:
+                pass
+            fila.put(None)
+        threading.Thread(target=trabalhar, daemon=True).start()
+
+        def receber():
+            if geracao != self._geracao or not self.winfo_exists():
+                return
+            try:
+                for _ in range(25):
+                    item = fila.get_nowait()
+                    if item is None:
+                        return
+                    i, dados = item
+                    foto = tk.PhotoImage(data=dados)
+                    self.imgs[i] = foto
+                    self.cards[i][2].config(image=foto, width=foto.width(), height=foto.height())
+            except queue.Empty:
+                pass
+            self.after(30, receber)
+        self.after(30, receber)
+
+    def _reorganizar(self):
+        if not self.cards:
+            return
+        w = self.grade.canvas.winfo_width()
+        cols = max(1, (w - 10) // (self.LARG + 22))
+        if cols == self._cols:
+            return
+        self._cols = cols
+        for i, c in enumerate(self.cards):
+            c[0].grid(row=i // cols, column=i % cols, padx=4, pady=5, sticky="n")
+
+    # ---------- grupos
+    def grupos(self):
+        if not self.n:
+            return []
+        gs, atual = [], [0]
+        for i in range(1, self.n):
+            if i - 1 in self.cortes:
+                gs.append(atual)
+                atual = [i]
+            else:
+                atual.append(i)
+        gs.append(atual)
+        return gs
+
+    def atualizar(self):
+        gs = self.grupos()
+        dono = {}
+        for k, g in enumerate(gs):
+            for i in g:
+                dono[i] = k
+        sel = set(range(self.sel[0], self.sel[1] + 1)) if self.sel else set()
+        for i, (f, topo, im, num, lig) in enumerate(self.cards):
+            k = dono[i]
+            cor = CORES_GRUPO[k % len(CORES_GRUPO)]
+            borda = LACRE if i in sel else cor
+            for w in (topo, num, lig):
+                w.config(bg=cor)
+            f.config(bg=borda, highlightthickness=0)
+            primeiro = gs[k][0] == i
+            topo.config(text=f"Arq. {k + 1}" if primeiro else "   ↳", fg=TINTA if primeiro else TINTA3)
+            num.config(fg=TINTA)
+            if i < self.n - 1:
+                junto = i not in self.cortes
+                lig.config(text="✂ separar" if junto else "+ juntar", fg=LACRE if junto else "#2d5a8a")
+        self.plano.set(" | ".join(str(g[0] + 1) if len(g) == 1 else f"{g[0] + 1}-{g[-1] + 1}" for g in gs))
+        if self.n:
+            self.info.config(text=f"{self.n} páginas  →  {len(gs)} arquivo(s)")
+            self.botao.config(text=f"Forjar {len(gs)} arquivo(s)")
+
+    def alternar(self, i):
+        if i in self.cortes:
+            self.cortes.discard(i)
+        else:
+            self.cortes.add(i)
+        self.atualizar()
+
+    def clicar(self, i, e):
+        if e.state & 0x0001 and self._ancora is not None:   # Shift
+            a, b = sorted((self._ancora, i))
+            self.sel = (a, b)
+        else:
+            self._ancora = i
+            self.sel = (i, i)
+        self.atualizar()
+
+    def juntar_sel(self):
+        if not self.sel:
+            messagebox.showinfo("Seleção", "Clique na primeira página e Shift + clique na última.")
+            return
+        a, b = self.sel
+        for i in range(a, b):
+            self.cortes.discard(i)
+        self.sel = None
+        self.atualizar()
+
+    def separar_sel(self):
+        if not self.sel:
+            messagebox.showinfo("Seleção", "Clique na primeira página e Shift + clique na última.")
+            return
+        a, b = self.sel
+        for i in range(max(0, a - 1), min(self.n - 1, b + 1)):
+            self.cortes.add(i)
+        self.sel = None
+        self.atualizar()
+
+    def tudo_separado(self):
+        self.cortes = set(range(max(0, self.n - 1)))
+        self.atualizar()
+
+    def tudo_junto(self):
+        self.cortes = set()
+        self.atualizar()
+
+    def aplicar_texto(self):
+        if not self.n:
+            return
+        texto = self.plano.get().replace("|", ",")
+        try:
+            gs = motor.interpretar_intervalos(texto, self.n)
+        except ValueError as e:
+            messagebox.showwarning("Não entendi", str(e))
+            return
+        todas = [i for g in gs for i in g]
+        if todas != list(range(self.n)):
+            faltam = sorted(set(range(self.n)) - set(todas))
+            msg = "Os grupos precisam seguir a ordem das páginas e usar todas, sem repetir."
+            if faltam:
+                msg += "\n\nFicaram de fora: " + ", ".join(str(i + 1) for i in faltam[:30])
+            messagebox.showwarning("Faltou alguma página", msg)
+            return
+        self.cortes = {g[-1] for g in gs[:-1]}
+        self.atualizar()
+
+    def rodar(self):
+        c = self.arq.caminho
+        if not self.precisa(c and self.n, "Escolha um PDF."):
+            return
+        gs = self.grupos()
+        pasta = self.destino.pasta or os.path.dirname(c)
+        prog = lambda f, t: self.app.progresso(f, t)  # noqa: E731
+        self.app.tarefa(lambda: motor.dividir_grupos(c, gs, pasta, prog, self.app.cancelado),
+                        pasta, f"{len(gs)} arquivo(s) forjado(s)", self, [c])
 
 
 class Organizar(Ferramenta):
@@ -1361,6 +1600,16 @@ class Formularios(ComVisualizador):
 
 
 # ---------------------------------------------------------------- conversores em par
+class Dividir(Par):
+    titulo = "Dividir PDF"
+    descricao = "Escolha como quer dividir."
+    resumo = "Separa páginas ou monta grupos."
+    selo = "vermelho"
+    sigla = "÷"
+    lados = [("Montar grupos", "veja as páginas e escolha o que vai junto", SepararGrupos),
+             ("Por números", "digite as páginas, ex.: 1-3, 5", DividirTexto)]
+
+
 class WordPar(Par):
     titulo = "Word ⇄ PDF"
     descricao = "Escolha para qual lado quer converter. Dá para colocar vários arquivos de uma vez."
@@ -1401,7 +1650,6 @@ class JpgPar(Par):
 
 
 Juntar.resumo = "Une vários pergaminhos num só."
-Dividir.resumo = "Separa páginas ou intervalos."
 Organizar.resumo = "Muda a ordem, gira, exclui páginas."
 Editar.resumo = "Escreve texto ou cola imagens."
 MarcaDagua.resumo = "Texto ou brasão em todas as páginas."
@@ -2071,7 +2319,7 @@ class App(tk.Tk):
                         links = [("abrir arquivo", lambda a=arq: motor.abrir(a)),
                                  ("abrir pasta", lambda a=arq: motor.abrir(os.path.dirname(a)))]
                     else:
-                        pasta = alvo if os.path.isdir(alvo) else os.path.dirname(saidas[0] if saidas else alvo)
+                        pasta = os.path.dirname(saidas[0]) if saidas else (alvo if os.path.isdir(alvo) else os.path.dirname(alvo))
                         texto = f"Forjado! {mensagem} em {os.path.basename(pasta) or pasta}"
                         links = [("abrir pasta", lambda p=pasta: motor.abrir(p))]
                     self.estado("pronta", texto, links)
