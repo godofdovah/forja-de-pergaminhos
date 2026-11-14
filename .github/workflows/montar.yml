@@ -37,6 +37,15 @@ jobs:
           --add-data "assets;assets" --add-data "versao.txt;."
           --hidden-import PIL._tkinter_finder --hidden-import autoteste --collect-all tkinterdnd2 --collect-all pdf2docx meupdf.py
 
+      - name: Tirar arquivos que o programa não usa (deixa mais leve)
+        shell: pwsh
+        run: |
+          $base = "dist\Forja de Pergaminhos\_internal\pymupdf"
+          foreach ($d in @("mupdf-devel", "layout")) {
+            if (Test-Path "$base\$d") { Remove-Item -Recurse -Force "$base\$d"; Write-Host "removido: $d" }
+          }
+          "{0:N1} MB" -f ((Get-ChildItem "dist\Forja de Pergaminhos" -Recurse | Measure-Object Length -Sum).Sum / 1MB)
+
       - name: Testar se o programa abre
         shell: pwsh
         run: |
