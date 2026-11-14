@@ -1,5 +1,7 @@
-pymupdf>=1.24
-pdf2docx
+pymupdf==2.1
+pdf2docx==0.5.13
+opencv-python-headless<5
+numpy<2.6
 pillow
 python-pptx
 openpyxl
